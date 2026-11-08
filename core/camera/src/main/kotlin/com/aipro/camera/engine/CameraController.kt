@@ -786,6 +786,25 @@ class CameraController(context: Context) {
 
             val meta = withTimeoutOrNull(CAPTURE_TIMEOUT_MS) { deferred.await() }
                 ?: Result.failure(IllegalStateException("촬영 시간 초과"))
+
+            // A failed request or timeout must not leave an empty/corrupt MediaStore entry behind.
+            // Also detach the pending callback so a late ImageReader frame is discarded.
+            if (meta.isFailure) {
+                if (pendingStill?.deferred === deferred) pendingStill = null
+                runCatching { imageTarget.close() }
+                runCatching { sink.delete(imageTarget.uri) }
+                rawTarget?.let {
+                    runCatching { it.close() }
+                    runCatching { sink.delete(it.uri) }
+                }
+                if (_state.value is EngineState.Capturing) {
+                    _state.value = EngineState.Previewing(cameraId ?: "")
+                }
+                return Result.failure(
+                    meta.exceptionOrNull() ?: IllegalStateException("사진 저장에 실패했습니다"),
+                )
+            }
+
             return meta.map { info ->
                 CaptureOutcome(
                     primaryUri = imageTarget.uri,
@@ -1487,7 +1506,7 @@ class CameraController(context: Context) {
         fallbackOrientationDegrees: Int,
         quality: Int = 98,
     ): ByteArray? = runCatching {
-        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options()) ?: return null
         val exifRotation = exifRotationDegrees(exifOrientation(bytes))
         val sourcePortrait = source.height > source.width
         val expectedPortrait = fallbackOrientationDegrees % 180 != 0
@@ -1505,12 +1524,9 @@ class CameraController(context: Context) {
             else -> 0
         }
         val totalRotation = orientationRotation - rollDegrees
-        val sourceAspect = if (source.width >= source.height) aspect else 1f / aspect
-        val outputAspect = if (PreviewMath.isAxisSwapped(totalRotation)) {
-            1f / sourceAspect
-        } else {
-            sourceAspect
-        }
+        // Output framing follows the requested camera/display orientation, not the current roll.
+        // Otherwise crossing 45° while levelling would suddenly flip a portrait JPEG to landscape.
+        val outputAspect = if (expectedPortrait) 1f / aspect else aspect
         val (outWidth, outHeight) = PreviewMath.largestInscribedAspectRect(
             source.width,
             source.height,
