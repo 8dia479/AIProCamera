@@ -60,7 +60,7 @@ internal class DelegateProber(private val context: Context) {
             val delegate = com.aipro.ai.inference.QualcommNpuDelegate.create(
                 context.applicationInfo.nativeLibraryDir,
             )
-            delegate.close()
+            com.aipro.ai.inference.QualcommNpuDelegate.release(delegate)
             BackendAvailability(
                 AccelerationBackend.NPU_QNN,
                 true,
