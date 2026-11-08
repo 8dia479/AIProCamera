@@ -54,6 +54,14 @@ class PreviewMathTest {
     }
 
     @Test
+    fun `quarter turn uses the rotated source bounds without truncating height`() {
+        val (w, h) = PreviewMath.largestInscribedAspectRect(4000, 3000, 3f / 4f, 90f)
+        assertEquals(3f / 4f, w.toFloat() / h.toFloat(), 0.001f)
+        assertEquals(3000, w)
+        assertEquals(4000, h)
+    }
+
+    @Test
     fun `inscribed rect shrinks when the image is tilted`() {
         val (flatW, _) = PreviewMath.largestInscribedAspectRect(4000, 3000, 4f / 3f, 0f)
         val (tiltedW, _) = PreviewMath.largestInscribedAspectRect(4000, 3000, 4f / 3f, 10f)

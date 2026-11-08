@@ -61,7 +61,7 @@ object PreviewMath {
         val byHeight = height / (s + c / aspect)
         val outWidth = minOf(byWidth, byHeight).toInt().coerceAtLeast(1)
         val outHeight = (outWidth / aspect).toInt().coerceAtLeast(1)
-        return minOf(outWidth, width) to minOf(outHeight, height)
+        return outWidth to outHeight
     }
 
     /**

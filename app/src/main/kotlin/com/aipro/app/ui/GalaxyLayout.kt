@@ -136,11 +136,9 @@ private fun GalaxyPreview(state: CameraUiState, vm: CameraViewModel) {
             onTextureAvailable = vm::attachPreview,
             onTextureDestroyed = vm::detachPreview,
             modifier = Modifier.fillMaxSize(),
-            rollDegrees = if (state.horizonLock) vm.horizonRollFlow else null,
             rotationOffset = state.previewRotationMode.toIntOrNull(),
         )
         if (state.showGrid) GridOverlay()
-        if (state.horizonLock) HorizonLevel(state.horizonRollDegrees)
     }
 }
 

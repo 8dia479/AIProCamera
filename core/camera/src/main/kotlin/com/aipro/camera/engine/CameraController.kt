@@ -79,7 +79,7 @@ class CameraController(context: Context) {
         private const val MAX_STILL_PIXELS = 12_500_000L
 
         private const val CAPTURE_TIMEOUT_MS = 12_000L
-        private const val CONVERGENCE_TIMEOUT_MS = 2_000L
+        private const val CONVERGENCE_TIMEOUT_MS = 650L
 
         // Storage layout from spec section 12.
         const val ORIGINAL_IMAGE_DIR = "Pictures/AIProCamera/Original"
@@ -807,6 +807,7 @@ class CameraController(context: Context) {
             deferred = deferred,
             crop = stillPlan?.cropRect,
             orientationDegrees = jpegOrientation,
+            horizonRollDegrees = normalizeRoll(horizonRollDegrees),
         )
 
         try {
@@ -964,18 +965,11 @@ class CameraController(context: Context) {
             val buffer = image.planes[0].buffer
             val rawBytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
             val crop = pending.crop
-            val levelRoll = normalizeRoll(horizonRollDegrees)
-            val exifNeedsNormalization =
-                exifOrientation(rawBytes) != android.media.ExifInterface.ORIENTATION_NORMAL
-            val expectedPortrait = pending.orientationDegrees % 180 != 0
-            val pixelsPortrait = image.height > image.width
-            val pixelAxesNeedNormalization =
-                image.width != image.height && expectedPortrait != pixelsPortrait
-            // Normalize orientation tags into the actual pixels. Some HAL paths write only EXIF,
-            // while others already rotate the JPEG buffer; dimension checks avoid double rotation.
-            val bytes = if (
-                crop != null || levelRoll != 0f || exifNeedsNormalization || pixelAxesNeedNormalization
-            ) {
+            // A normal single-frame photo is saved byte-for-byte as produced by Camera2. Re-encoding
+            // solely to normalize EXIF adds seconds and can introduce visible JPEG artifacts. EXIF
+            // remains intact for gallery apps. Only crop/level requests enter the bitmap renderer.
+            val levelRoll = pending.horizonRollDegrees
+            val bytes = if (crop != null || levelRoll != 0f) {
                 renderJpeg(
                     rawBytes,
                     stillAspect.ratio,
@@ -1494,6 +1488,7 @@ class CameraController(context: Context) {
         val deferred: CompletableDeferred<Result<StillMeta>>,
         val crop: CropRect? = null,
         val orientationDegrees: Int = 0,
+        val horizonRollDegrees: Float = 0f,
     )
 
     /** Rolls below this are sensor noise, not a real tilt; re-encoding for them would be wasteful. */

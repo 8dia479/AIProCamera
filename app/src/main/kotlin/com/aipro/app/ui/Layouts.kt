@@ -57,7 +57,6 @@ fun PreviewArea(
             displayRotationDegrees = state.displayRotationDegrees,
             onTextureAvailable = vm::attachPreview,
             onTextureDestroyed = vm::detachPreview,
-            rollDegrees = if (state.horizonLock) vm.horizonRollFlow else null,
             rotationOffset = state.previewRotationMode.toIntOrNull(),
         )
         if (state.showGrid) GridOverlay()
