@@ -27,6 +27,8 @@ dependencies {
     // LiteRT (the runtime formerly known as TensorFlow Lite) - fully on-device, no network.
     implementation(libs.litert)
     implementation(libs.litert.gpu)
+    // LiteRT's CompiledModel Qualcomm QNN compiler plugin/dispatch runtime.
+    implementation("com.google.ai.edge.litert:litert-npu-runtime-qualcomm:2.3.2")
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
