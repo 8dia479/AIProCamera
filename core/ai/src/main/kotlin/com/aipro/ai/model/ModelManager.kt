@@ -31,6 +31,8 @@ class ModelManager(private val context: Context) {
 
     fun fileFor(manifest: ModelManifest): File = File(root, manifest.id).resolve(manifest.fileName)
 
+    fun nativeLibraryDir(): String = context.applicationInfo.nativeLibraryDir
+
     fun install(uri: Uri, task: ModelTask, displayName: String): Result<ModelManifest> = runCatching {
         val resolver = context.contentResolver
         val id = "m_${System.currentTimeMillis()}"
@@ -111,7 +113,7 @@ class ModelManager(private val context: Context) {
             put(bytes)
             rewind()
         }
-        com.aipro.ai.inference.InterpreterFactory.create(buffer, threads = 1, useGpu = false).use { engine ->
+        com.aipro.ai.inference.InterpreterFactory.create(buffer, threads = 1).use { engine ->
             ShapeProbe(
                 loaded = true,
                 inputShape = engine.inputShape,
