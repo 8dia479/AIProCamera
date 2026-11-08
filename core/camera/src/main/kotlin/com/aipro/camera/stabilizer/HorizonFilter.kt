@@ -116,10 +116,12 @@ class HorizonFilter(
      * Zoom needed so rotating by [rollRadians] does not expose empty corners. For a rotation of θ the
      * inscribed axis-aligned rectangle shrinks by |cosθ| + |sinθ| in the worst case.
      */
-    fun fillZoom(rollRadians: Float = rollRadians()): Float {
+    fun fillZoom(rollRadians: Float = rollRadians(), sourceAspect: Float = 1f): Float {
         val c = abs(cos(rollRadians))
         val s = abs(kotlin.math.sin(rollRadians))
-        return (c + s).coerceIn(1f, 1.45f)
+        val aspect = sourceAspect.takeIf { it.isFinite() && it > 0f }?.coerceIn(0.1f, 10f) ?: 1f
+        // Project rotated output corners onto the source axes; c+s alone assumes square pixels.
+        return maxOf(c + s / aspect, c + s * aspect).coerceIn(1f, 2.5f)
     }
 
     /** Signed difference a→b inside (-180, 180]. */
