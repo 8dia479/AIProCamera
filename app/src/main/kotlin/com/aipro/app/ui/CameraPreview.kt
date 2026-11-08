@@ -223,7 +223,7 @@ internal fun applyViewTransform(
         lastLoggedSignature = signature
         android.util.Log.i("AIProPreview", signature)
         PreviewDiag.publish(
-            "센서 보정 ${rotationDegrees}° · 사용자 보정 ${userOffset}° · 수평 ${"%.1f".format(roll)}°",
+            "표시 회전 ${userOffset}° · 센서 자동 보정 ${rotationDegrees}° · 수평 ${"%.1f".format(roll)}°",
         )
     }
 }

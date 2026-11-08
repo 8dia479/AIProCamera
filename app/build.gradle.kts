@@ -17,8 +17,8 @@ android {
         applicationId = "com.aipro.camera"
         minSdk = 31
         targetSdk = 35
-        versionCode = 18
-        versionName = "1.3.7"
+        versionCode = 19
+        versionName = "1.3.8"
         // Stamped at configure time so the on-screen label proves which build is actually running.
         val buildStamp = SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date())
         buildConfigField("String", "BUILD_TIME", "\"$buildStamp\"")
