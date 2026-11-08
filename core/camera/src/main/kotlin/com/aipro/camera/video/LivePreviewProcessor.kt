@@ -131,8 +131,9 @@ class LivePreviewProcessor(
                 tone = tone.get(),
                 rollRadians = roll.get(),
                 zoom = zoom.get(),
-                texelWidth = 1f / viewWidth.coerceAtLeast(1),
-                texelHeight = 1f / viewHeight.coerceAtLeast(1),
+                texelWidth = 1f / bufferWidth.coerceAtLeast(1),
+                texelHeight = 1f / bufferHeight.coerceAtLeast(1),
+                aspect = bufferWidth.toFloat() / bufferHeight.coerceAtLeast(1),
             )
             eglCore.swapBuffers(window)
         }
