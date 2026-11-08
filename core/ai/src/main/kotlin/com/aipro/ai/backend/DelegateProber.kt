@@ -2,6 +2,7 @@ package com.aipro.ai.backend
 
 import android.content.Context
 import com.aipro.common.AiproLog
+import com.aipro.ai.inference.CompiledModelRunner
 
 /**
  * Asks the LiteRT runtime itself which accelerators this device can actually use.
@@ -56,22 +57,30 @@ internal class DelegateProber(private val context: Context) {
      */
     fun probeNpu(): BackendAvailability {
         val soc = "${android.os.Build.SOC_MANUFACTURER} ${android.os.Build.SOC_MODEL}".trim()
-        return runCatching {
-            val delegate = com.aipro.ai.inference.QualcommNpuDelegate.create(
-                context.applicationInfo.nativeLibraryDir,
+        val supported = runCatching {
+            com.google.ai.edge.litert.BuiltinNpuAcceleratorProvider(context).isDeviceSupported()
+        }.getOrDefault(false)
+        if (!supported) {
+            return BackendAvailability(
+                AccelerationBackend.NPU_QNN,
+                false,
+                "LiteRT NPU provider가 이 기기를 지원하지 않습니다 ($soc)",
             )
-            com.aipro.ai.inference.QualcommNpuDelegate.release(delegate)
+        }
+        return runCatching {
+            val available = CompiledModelRunner.availableAccelerators(context, useNpu = true)
+            val ready = available.contains("NPU")
             BackendAvailability(
                 AccelerationBackend.NPU_QNN,
-                true,
-                "Qualcomm QNN HTP 런타임 초기화 성공 ($soc) · 모델별 지원 연산은 실행 시 확인",
+                ready,
+                if (ready) "LiteRT NPU provider 준비됨 ($soc) · 모델 연산자에 따라 CPU 보완 가능"
+                else "기기는 지원되지만 런타임 가속기 목록에 NPU가 없습니다 ($soc)",
             )
         }.getOrElse { error ->
-            val reason = error.cause?.message ?: error.message ?: error.javaClass.simpleName
             BackendAvailability(
                 AccelerationBackend.NPU_QNN,
                 false,
-                "QNN HTP 초기화 실패 ($soc): $reason",
+                "LiteRT NPU 초기화 실패 ($soc): ${error.message ?: error.javaClass.simpleName}",
             )
         }
     }
