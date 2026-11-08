@@ -31,7 +31,7 @@ class ModelManager(private val context: Context) {
 
     fun fileFor(manifest: ModelManifest): File = File(root, manifest.id).resolve(manifest.fileName)
 
-    fun nativeLibraryDir(): String = context.applicationInfo.nativeLibraryDir
+    fun applicationContext(): Context = context.applicationContext
 
     fun install(uri: Uri, task: ModelTask, displayName: String): Result<ModelManifest> = runCatching {
         val resolver = context.contentResolver
