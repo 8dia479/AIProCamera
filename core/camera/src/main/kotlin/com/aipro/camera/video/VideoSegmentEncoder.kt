@@ -162,7 +162,8 @@ internal class VideoSegmentEncoder(
         var encoderDone = false
         val filter = HorizonFilter()
         val rollRadians = Math.toRadians(horizonRollDegrees.toDouble()).toFloat()
-        val fillZoom = filter.fillZoom(rollRadians)
+        val frameAspect = width.toFloat() / height.coerceAtLeast(1)
+        val fillZoom = filter.fillZoom(rollRadians, frameAspect)
         val texelX = 1f / width.toFloat()
         val texelY = 1f / height.toFloat()
 
@@ -207,6 +208,7 @@ internal class VideoSegmentEncoder(
                             zoom = fillZoom,
                             texelWidth = texelX,
                             texelHeight = texelY,
+                            aspect = frameAspect,
                         )
                         egl.setPresentationTime(eglSurface, (ptsUs - startUs) * 1_000L)
                         if (!egl.swapBuffers(eglSurface)) {
