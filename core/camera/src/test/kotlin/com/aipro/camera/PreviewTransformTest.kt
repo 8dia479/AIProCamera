@@ -26,7 +26,7 @@ class PreviewTransformTest {
 
     @Test
     fun `negative rotation wraps into 0-359`() {
-        val geometry = PreviewTransform.compute(4000, 3000, 1080, 2400, 0, 270, facingFront = false)
+        val geometry = PreviewTransform.compute(4000, 3000, 1080, 2400, 0, 270, facingFront = true)
         assertEquals(90, geometry.rotationDegrees)
     }
 

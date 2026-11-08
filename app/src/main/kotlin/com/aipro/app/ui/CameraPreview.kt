@@ -203,8 +203,14 @@ internal fun applyViewTransform(
     // Do not recalculate cover scale from the live horizon angle. That made the camera zoom in
     // continuously as the phone rolled. Keep the framing fixed; black corner wedges are preferable
     // to a changing focal length/FOV while horizon lock is active.
-    val scale = PreviewMath.coverScale(viewWidth, viewHeight, boxWidthPx, boxHeightPx, baseRotation)
-        .coerceIn(0.5f, 4f)
+    val scale = PreviewMath.horizonStableCoverScale(
+        contentWidth = viewWidth,
+        contentHeight = viewHeight,
+        viewWidth = boxWidthPx,
+        viewHeight = boxHeightPx,
+        baseRotationDegrees = baseRotation.toFloat(),
+        rollDegrees = roll,
+    ).coerceIn(0.5f, 4f)
 
     view.rotation = rotation
     view.scaleX = if (mirrored) -scale else scale

@@ -1080,10 +1080,8 @@ class CameraController(context: Context) {
         val session = awaitReadySession()
             ?: return Result.failure(IllegalStateException("카메라 세션 재구성 대기 시간 초과 · 프리뷰 상태를 확인해 주세요"))
         if (multiFrameReader == null) {
-            createSessionIfReady()
-            if (multiFrameReader == null) return Result.failure(IllegalStateException("멀티프레임 리더를 만들 수 없습니다"))
+            return Result.failure(IllegalStateException("멀티프레임 리더가 준비되지 않았습니다"))
         }
-        val session = session ?: return Result.failure(IllegalStateException("프리뷰 세션이 준비되지 않았습니다"))
         if (!NativeMultiFrame.isAvailable) return Result.failure(IllegalStateException("네이티브 병합 모듈을 사용할 수 없습니다"))
 
         val frameCount = frames.coerceIn(2, 9)

@@ -64,6 +64,25 @@ object PreviewMath {
         return minOf(outWidth, width) to minOf(outHeight, height)
     }
 
+    /**
+     * Preview cover scale used while horizon lock is active. [rollDegrees] is intentionally ignored:
+     * rotating the horizon rotates the image inside a fixed framing window but never zooms it.
+     */
+    fun horizonStableCoverScale(
+        contentWidth: Float,
+        contentHeight: Float,
+        viewWidth: Float,
+        viewHeight: Float,
+        baseRotationDegrees: Float,
+        rollDegrees: Float,
+    ): Float = coverScale(
+        contentWidth,
+        contentHeight,
+        viewWidth,
+        viewHeight,
+        baseRotationDegrees,
+    )
+
     /** Scale needed so a [width] x [height] image rotated by [angleDegrees] still covers the output. */
     fun levelFillScale(
         width: Int,
