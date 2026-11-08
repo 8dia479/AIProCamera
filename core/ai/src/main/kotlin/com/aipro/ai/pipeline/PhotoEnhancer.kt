@@ -1,7 +1,6 @@
 package com.aipro.ai.pipeline
 
 import android.graphics.Bitmap
-import com.aipro.ai.inference.InterpreterFactory
 import com.aipro.ai.inference.CompiledModelRunner
 import com.aipro.ai.backend.AccelerationBackend
 import com.aipro.ai.model.ModelManager
@@ -10,9 +9,6 @@ import com.aipro.ai.scene.SceneAnalyzer
 import com.aipro.common.AiproLog
 import com.aipro.common.ShootingPurpose
 import com.aipro.nativebridge.NativeImageOps
-import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * The photo enhancement pipeline described in spec section 8.
@@ -133,49 +129,22 @@ class PhotoEnhancer(
         )
     }
 
-    /** Try the selected accelerator first, then the next real execution path. */
+    /** Runs an installed image model on NPU, then GPU, then CPU. */
     private fun runModel(task: ModelTask, bitmap: Bitmap, threads: Int, backend: AccelerationBackend): Bitmap? {
         val manifest = models.modelFor(task) ?: return null
         val file = models.fileFor(manifest)
         if (!file.isFile) return null
-
-        if (backend == AccelerationBackend.NPU_QNN) {
-            runCatching {
-                val bytes = file.inputStream().use { it.readBytes() }
-                val buffer = ByteBuffer.allocateDirect(bytes.size).apply {
-                    order(ByteOrder.nativeOrder()); put(bytes); rewind()
-                }
-                InterpreterFactory.create(
-                    modelBuffer = buffer,
-                    threads = threads,
-                    useNpu = true,
-                    nativeLibraryDir = models.nativeLibraryDir(),
-                ).use { it.run(bitmap) }
-            }.getOrNull()?.let {
-                AiproLog.i(TAG, "model ${manifest.displayName}: Qualcomm QNN HTP")
-                return it
-            }
-            AiproLog.w(TAG, "model ${manifest.displayName}: NPU 실패 → GPU 시도")
-        }
-
-        if (backend != AccelerationBackend.CPU_XNNPACK) {
-            runCatching {
-                CompiledModelRunner.runOnGpu(file, manifest, bitmap)
-            }.getOrNull()?.let {
-                AiproLog.i(TAG, "model ${manifest.displayName}: LiteRT GPU")
-                return it
-            }
-            AiproLog.w(TAG, "model ${manifest.displayName}: GPU 실패 → CPU 시도")
-        }
-
-        return runCatching {
-            val bytes = file.inputStream().use { it.readBytes() }
-            val buffer = ByteBuffer.allocateDirect(bytes.size).apply {
-                order(ByteOrder.nativeOrder()); put(bytes); rewind()
-            }
-            InterpreterFactory.create(buffer, threads = threads).use { it.run(bitmap) }
-        }.onFailure {
-            AiproLog.w(TAG, "model ${manifest.displayName} CPU 추론 실패 → 고전 경로 사용", it)
-        }.getOrNull()
+        val result = CompiledModelRunner.run(
+            context = models.applicationContext(),
+            file = file,
+            manifest = manifest,
+            bitmap = bitmap,
+            preferNpu = backend == AccelerationBackend.NPU_QNN,
+            preferGpu = backend != AccelerationBackend.CPU_XNNPACK,
+            threads = threads,
+        ) ?: return null
+        AiproLog.i(TAG, "model ${manifest.displayName}: ${result.accelerator.name}")
+        return result.bitmap
     }
+}
 }
