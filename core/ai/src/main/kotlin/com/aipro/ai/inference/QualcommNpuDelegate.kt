@@ -30,4 +30,9 @@ internal object QualcommNpuDelegate {
         return instance as? Delegate
             ?: error("QnnDelegate가 LiteRT Delegate 인터페이스를 구현하지 않습니다")
     }
+
+    fun release(delegate: Delegate?) {
+        if (delegate == null) return
+        runCatching { delegate.javaClass.getMethod("close").invoke(delegate) }
+    }
 }
