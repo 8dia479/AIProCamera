@@ -1,0 +1,1 @@
+C:\Users\ailri\AndroidStudioProjects\AIProCamera\core\native\build\intermediates\cxx\RelWithDebInfo\5q5q6w2b\obj\arm64-v8a

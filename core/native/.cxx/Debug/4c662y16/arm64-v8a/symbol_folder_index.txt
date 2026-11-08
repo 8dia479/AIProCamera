@@ -1,0 +1,1 @@
+C:\Users\ailri\AndroidStudioProjects\AIProCamera\core\native\build\intermediates\cxx\Debug\4c662y16\obj\arm64-v8a

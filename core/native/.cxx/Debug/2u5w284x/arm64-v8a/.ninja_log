@@ -1,0 +1,10 @@
+# ninja log v5
+7	232	8157708926331254	CMakeFiles/aipro_native.dir/jni_bridge.cpp.o	cee9aec0c7fc0083
+62	238	8157708926376450	CMakeFiles/aipro_native.dir/jni_video.cpp.o	cb4d80425790254d
+15	1147	8157708935399691	CMakeFiles/aipro_native.dir/aipro_core.cpp.o	5ca573887246577c
+51	1361	8157708937532140	CMakeFiles/aipro_native.dir/jni_image.cpp.o	c6218145605dd4b5
+24	1427	8157708938228764	CMakeFiles/aipro_native.dir/video_ops.cpp.o	3df69fa870377688
+42	1539	8157708939320937	CMakeFiles/aipro_native.dir/jni_multiframe.cpp.o	7d3f6068f5a2a7b8
+1	1545	8157708939383936	CMakeFiles/aipro_native.dir/image_ops.cpp.o	f28fc56804cdfbe2
+33	1588	8157708939831073	CMakeFiles/aipro_native.dir/multiframe.cpp.o	68f3c25c64333a5d
+1588	1727	8157708941226679	C:/Users/ailri/AndroidStudioProjects/AIProCamera/core/native/build/intermediates/cxx/Debug/2u5w284x/obj/arm64-v8a/libaipro_native.so	9f9827d5e34862c

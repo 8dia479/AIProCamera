@@ -1,0 +1,3 @@
+C:/Users/ailri/AndroidStudioProjects/AIProCamera/core/native/.cxx/Debug/4c662y16/arm64-v8a/CMakeFiles/aipro_native.dir
+C:/Users/ailri/AndroidStudioProjects/AIProCamera/core/native/.cxx/Debug/4c662y16/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/Users/ailri/AndroidStudioProjects/AIProCamera/core/native/.cxx/Debug/4c662y16/arm64-v8a/CMakeFiles/rebuild_cache.dir
