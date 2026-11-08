@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,16 +48,13 @@ fun PreviewArea(
     modifier: Modifier = Modifier,
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
-    val portrait = androidx.compose.ui.platform.LocalConfiguration.current.let {
-        it.screenHeightDp >= it.screenWidthDp
-    }
-    // fillMaxSize (not fillMaxWidth): inside a weighted Column this box otherwise wraps its content
-    // and a fillMaxSize preview inside it collapses to zero height -- the "weird camera screen".
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize().background(Color.Black)) {
+        val portrait = maxHeight >= maxWidth
+        val displayAspect = if (portrait) 1f / state.aspectRatio.ratio else state.aspectRatio.ratio
         CameraPreview(
             geometry = state.geometry,
-            displayAspect = state.geometry?.aspectRatio?.takeIf { it > 0f }
-                ?: if (portrait) 1f / state.aspectRatio.ratio else state.aspectRatio.ratio,
+            displayAspect = displayAspect,
+            displayRotationDegrees = state.displayRotationDegrees,
             onTextureAvailable = vm::attachPreview,
             onTextureDestroyed = vm::detachPreview,
             rollDegrees = if (state.horizonLock) vm.horizonRollFlow else null,
@@ -301,7 +299,7 @@ fun SettingsDialogBody(
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("프리뷰 회전", style = MaterialTheme.typography.titleSmall)
         Text(
-            "0°(기본)는 센서 방향을 그대로 따릅니다. 값은 여기에 더해지는 보정 각도입니다.",
+            "기본값 0°는 추가 센서 보정 없음입니다. 센서 장착 방향은 TextureView가 처리하고, 표시 회전은 현재 화면 방향을 따릅니다.",
             color = Color(0xFF9E9E9E),
             fontSize = 10.sp,
         )

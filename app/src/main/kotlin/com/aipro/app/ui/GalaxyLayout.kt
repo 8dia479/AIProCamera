@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -124,20 +125,17 @@ fun GalaxyFlexLayout(
 /** Preview + grid + horizon level, framed to the selected ratio. */
 @Composable
 private fun GalaxyPreview(state: CameraUiState, vm: CameraViewModel) {
-    val configuration = LocalConfiguration.current
-    val portrait = configuration.screenHeightDp >= configuration.screenWidthDp
-    // The viewfinder must match the user's selected framing ratio. The Camera2 preview stream can
-    // have a slightly different native ratio; using geometry.aspectRatio here silently replaced
-    // the selected 4:3/16:9 framing with the stream's ratio and made the subject look stretched.
-    val displayAspect = if (portrait) 1f / state.aspectRatio.ratio else state.aspectRatio.ratio
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // Use this camera viewport (including Flex/foldable layouts), not the full display bounds.
+        val portrait = maxHeight >= maxWidth
+        val displayAspect = if (portrait) 1f / state.aspectRatio.ratio else state.aspectRatio.ratio
         CameraPreview(
             geometry = state.geometry,
             displayAspect = displayAspect,
+            displayRotationDegrees = state.displayRotationDegrees,
             onTextureAvailable = vm::attachPreview,
             onTextureDestroyed = vm::detachPreview,
             modifier = Modifier.fillMaxSize(),
-            // Only while the lock is on: a null flow costs nothing and keeps the transform static.
             rollDegrees = if (state.horizonLock) vm.horizonRollFlow else null,
             rotationOffset = state.previewRotationMode.toIntOrNull(),
         )

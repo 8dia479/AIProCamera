@@ -1,12 +1,12 @@
 package com.aipro.app.ui
 
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.view.TextureView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -22,7 +22,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -31,78 +30,53 @@ import com.aipro.camera.preview.PreviewMath
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Camera preview.
+ * Camera2 preview in a ratio-correct viewport.
  *
- * The image is never transformed by a hand-built `TextureView.setTransform` matrix any more. That
- * matrix lived in an ambiguous coordinate space (view space vs texture space) and, as soon as the
- * buffer was rotated, it turned into an anisotropic scale - the "옆으로 늘어난" preview.
- *
- * Instead:
- *  1. the ratio box (1:1 / 4:3 / 16:9 / 22:9 as seen in portrait) is the clip window,
- *  2. the `TextureView` is sized so that **its own aspect ratio equals the camera buffer's**, which
- *     makes the TextureView's implicit "stretch buffer to view bounds" a *uniform* scale,
- *  3. rotation and the (uniform) cover scale are applied as plain [android.view.View] properties,
- *     which can only scale uniformly - a stretched image is impossible by construction.
- *
- * When the preview stream matches the selected ratio (which the engine now picks on purpose) the
- * cover scale is exactly 1.0, so there is no zoom-in either.
+ * TextureView compensates for the physical camera-sensor orientation itself. The app must reverse
+ * TextureView's default non-uniform fit, apply a uniform cover scale, and compensate for display
+ * rotation. Resizing and rotating the View itself caused the portrait/landscape distortion.
  */
 @Composable
 fun CameraPreview(
     geometry: PreviewGeometry?,
     displayAspect: Float,
+    displayRotationDegrees: Int,
     onTextureAvailable: (SurfaceTexture, Int, Int) -> Unit,
     onTextureDestroyed: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Live device roll (degrees) used by the horizon lock; collected off the recomposition path. */
+    /** Live device roll used by horizon lock. */
     rollDegrees: StateFlow<Float>? = null,
+    /** Additional manual sensor correction. Zero means no extra correction. */
     rotationOffset: Int? = null,
 ) {
     var textureView by remember { mutableStateOf<TextureView?>(null) }
-    // Re-applied from the layout listener as well: on the first frames the view has no size yet and
-    // `update` is not called again just because layout changed.
-    // Plain holder (not a MutableState): writing it must not schedule a recomposition.
     val applier = remember { TransformApplier() }
     val latestGeometry by rememberUpdatedState(geometry)
-    val latestRoll by rememberUpdatedState(rollDegrees)
     val latestOffset by rememberUpdatedState(rotationOffset)
-    val rotationDegrees = geometry?.rotationDegrees ?: 0
-    val effectiveRotation = PreviewMath.baseRotation(rotationDegrees, rotationOffset)
-    // A quarter-turn offset swaps the visible frame's axes as well as the image.
-    val baseSwapsAxes = rotationDegrees == 90 || rotationDegrees == 270
-    val effectiveSwapsAxes = effectiveRotation == 90 || effectiveRotation == 270
-    val effectiveDisplayAspect = if (baseSwapsAxes != effectiveSwapsAxes && displayAspect > 0f) {
-        1f / displayAspect
-    } else {
-        displayAspect
-    }
-    val bufferAspect = bufferAspectOf(geometry, effectiveDisplayAspect)
 
-    val density = LocalDensity.current
+    val correction = rotationOffset ?: 0
+    val normalizedCorrection = ((correction % 360) + 360) % 360
+    // A manual quarter-turn changes the selected frame's axes. Sensor orientation is handled by
+    // TextureView and must not be added to this user-facing correction.
+    val effectiveDisplayAspect =
+        if (normalizedCorrection == 90 || normalizedCorrection == 270) 1f / displayAspect
+        else displayAspect
+
     BoxWithConstraints(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // The visible frame follows the *effective* sensor + user offset rotation.
-        val box: Pair<Dp, Dp> = fitInside(maxWidth, maxHeight, effectiveDisplayAspect)
-        val quarterTurn = effectiveSwapsAxes
-        // Size for the *rotated* image, then undo the quarter turn for the view itself, so the
-        // unrotated view is larger than the box and only gets clipped - never upscaled.
-        val shown = fitInside(box.first, box.second, if (quarterTurn) 1f / bufferAspect else bufferAspect)
-        val viewSize = if (quarterTurn) shown.second to shown.first else shown
-        val boxWidthPx = with(density) { box.first.toPx() }
-        val boxHeightPx = with(density) { box.second.toPx() }
+        val viewport = fitInside(maxWidth, maxHeight, effectiveDisplayAspect)
+
         applier.transform = { view ->
             applyViewTransform(
                 view = view,
-                rotationDegrees = rotationDegrees,
-                boxWidthPx = boxWidthPx,
-                boxHeightPx = boxHeightPx,
-                roll = latestRoll?.value ?: 0f,
+                geometry = latestGeometry,
+                displayRotationDegrees = displayRotationDegrees,
                 offset = latestOffset,
-                mirrored = geometry?.mirrored == true,
+                mirrored = latestGeometry?.mirrored == true,
             )
         }
 
         Box(
-            modifier = Modifier.size(box.first, box.second).clipToBounds(),
+            modifier = Modifier.size(viewport.first, viewport.second).clipToBounds(),
             contentAlignment = Alignment.Center,
         ) {
             AndroidView(
@@ -134,96 +108,121 @@ fun CameraPreview(
                     textureView = view
                     applier.transform?.invoke(view)
                 },
-                // requiredSize: the view is deliberately *larger* than the ratio box (it is clipped),
-                // so the parent's constraints must not shrink it back.
-                modifier = Modifier.requiredSize(viewSize.first, viewSize.second),
+                modifier = Modifier.fillMaxSize(),
             )
 
-            // Roll is a 60 Hz signal: it is applied straight to the View, not through recomposition.
+            // Base framing is fixed. Only the live leveling angle changes, preventing horizon lock
+            // from continuously changing the scale/zoom as the phone is rotated.
             LaunchedEffect(
                 textureView,
-                boxWidthPx,
-                boxHeightPx,
-                effectiveRotation,
-                geometry?.mirrored,
-                rollDegrees,
+                viewport.first,
+                viewport.second,
+                geometry,
+                displayRotationDegrees,
                 rotationOffset,
+                rollDegrees,
             ) {
                 val view = textureView ?: return@LaunchedEffect
-                val apply = { roll: Float ->
-                    applyViewTransform(
-                        view,
-                        rotationDegrees,
-                        boxWidthPx,
-                        boxHeightPx,
-                        roll,
-                        rotationOffset,
-                        geometry?.mirrored == true,
-                    )
+                applier.transform?.invoke(view)
+                val applyRoll: (Float) -> Unit = { roll ->
+                    view.rotation = PreviewMath.levelingRotation(roll, geometry?.mirrored == true)
                 }
-                if (rollDegrees == null) apply(0f) else rollDegrees.collect(apply)
+                if (rollDegrees == null) {
+                    applyRoll(0f)
+                } else {
+                    rollDegrees.collect(applyRoll)
+                }
             }
         }
     }
 }
 
-/** Holds the latest transform lambda so the layout listener always applies current values. */
+/** Holds the latest transform lambda so layout callbacks use current camera geometry. */
 internal class TransformApplier {
     var transform: ((TextureView) -> Unit)? = null
 }
 
-private fun bufferAspectOf(geometry: PreviewGeometry?, displayAspect: Float): Float {
-    val width = geometry?.bufferWidth ?: 0
-    val height = geometry?.bufferHeight ?: 0
-    if (width <= 0 || height <= 0) return displayAspect
-    return width.toFloat() / height.toFloat()
-}
-
 /**
- * Sets rotation and a **uniform** cover scale on [view]. Because both scale factors are the same, no
- * amount of rotation can stretch the image; the only trade-off is cropping, which is intended (the
- * clip window is the selected ratio).
+ * Reverses TextureView's default independent X/Y scaling before applying one uniform cover scale.
+ * The matrix uses the Camera2 relative rotation only to decide whether the preview axes are swapped.
+ * It does not rotate by SENSOR_ORIENTATION a second time: TextureView already handles that.
  */
 internal fun applyViewTransform(
     view: TextureView,
-    rotationDegrees: Int,
-    boxWidthPx: Float,
-    boxHeightPx: Float,
-    roll: Float = 0f,
+    geometry: PreviewGeometry?,
+    displayRotationDegrees: Int,
     offset: Int? = null,
     mirrored: Boolean = false,
 ) {
     val viewWidth = view.width.toFloat()
     val viewHeight = view.height.toFloat()
-    if (viewWidth <= 0f || viewHeight <= 0f || boxWidthPx <= 0f || boxHeightPx <= 0f) return
+    val bufferWidth = geometry?.bufferWidth?.toFloat() ?: 0f
+    val bufferHeight = geometry?.bufferHeight?.toFloat() ?: 0f
+    if (
+        viewWidth <= 0f || viewHeight <= 0f ||
+        bufferWidth <= 0f || bufferHeight <= 0f ||
+        geometry == null
+    ) return
 
-    val baseRotation = PreviewMath.baseRotation(rotationDegrees, offset)
-    val rotation = PreviewMath.totalRotation(baseRotation, roll, mirrored)
+    val correction = offset ?: 0
+    val relativeRotation = ((geometry.rotationDegrees + correction) % 360 + 360) % 360
+    val isRotationRequired = relativeRotation % 180 != 0
+    val sensorOrientation = ((geometry.sensorOrientationDegrees % 360) + 360) % 360
 
-    // Do not recalculate cover scale from the live horizon angle. That made the camera zoom in
-    // continuously as the phone rolled. Keep the framing fixed; black corner wedges are preferable
-    // to a changing focal length/FOV while horizon lock is active.
-    val scale = PreviewMath.horizonStableCoverScale(
-        contentWidth = viewWidth,
-        contentHeight = viewHeight,
-        viewWidth = boxWidthPx,
-        viewHeight = boxHeightPx,
-        baseRotationDegrees = baseRotation.toFloat(),
-        rollDegrees = roll,
-    ).coerceIn(0.5f, 4f)
+    // These factors undo the non-uniform fit TextureView applied when mapping the camera buffer
+    // into the viewport. This is the Android Camera2 resizable-preview scaling algorithm.
+    val scaleX: Float
+    val scaleY: Float
+    if (sensorOrientation == 0) {
+        scaleX = if (!isRotationRequired) viewWidth / bufferHeight else viewWidth / bufferWidth
+        scaleY = if (!isRotationRequired) viewHeight / bufferWidth else viewHeight / bufferHeight
+    } else {
+        scaleX = if (isRotationRequired) viewWidth / bufferHeight else viewWidth / bufferWidth
+        scaleY = if (isRotationRequired) viewHeight / bufferWidth else viewHeight / bufferHeight
+    }
+    if (
+        scaleX <= 0f || scaleY <= 0f ||
+        !scaleX.isFinite() || !scaleY.isFinite()
+    ) return
 
-    view.rotation = rotation
-    view.scaleX = if (mirrored) -scale else scale
-    view.scaleY = scale
+    val uniformCover = maxOf(scaleX, scaleY)
+    val centerX = viewWidth / 2f
+    val centerY = viewHeight / 2f
+    val matrix = Matrix()
+    if (isRotationRequired) {
+        matrix.setScale(
+            (1f / scaleX) * uniformCover,
+            (1f / scaleY) * uniformCover,
+            centerX,
+            centerY,
+        )
+    } else {
+        matrix.setScale(
+            (viewHeight / viewWidth / scaleY) * uniformCover,
+            (viewWidth / viewHeight / scaleX) * uniformCover,
+            centerX,
+            centerY,
+        )
+    }
+    // Display#getRotation is counter-clockwise. Manual correction is an extra clockwise turn.
+    matrix.postRotate((-displayRotationDegrees + correction).toFloat(), centerX, centerY)
+    view.setTransform(matrix)
 
-    val userOffset = offset ?: 0
-    val signature = "buf=${viewWidth.toInt()}x${viewHeight.toInt()} box=${boxWidthPx.toInt()}x${boxHeightPx.toInt()} " +
-        "sensorFix=${rotationDegrees} offset=${userOffset} scale=${"%.2f".format(scale)} roll=${"%.1f".format(roll)}"
+    // Keep the base sensor/display transform inside the texture matrix. View properties are reserved
+    // for front-camera mirroring and the live horizon-lock roll.
+    view.rotation = 0f
+    view.scaleX = if (mirrored) -1f else 1f
+    view.scaleY = 1f
+
+    val signature = "buf=${bufferWidth.toInt()}x${bufferHeight.toInt()} " +
+        "view=${viewWidth.toInt()}x${viewHeight.toInt()} sensor=${sensorOrientation} " +
+        "correction=${correction} display=${displayRotationDegrees} relative=${relativeRotation} " +
+        "cover=${"%.2f".format(uniformCover)}"
     if (signature != lastLoggedSignature) {
         lastLoggedSignature = signature
         android.util.Log.i("AIProPreview", signature)
         PreviewDiag.publish(
-            "표시 회전 ${userOffset}° · 센서 자동 보정 ${rotationDegrees}° · 수평 ${"%.1f".format(roll)}°",
+            "센서 보정 ${correction}° · 표시 회전 ${displayRotationDegrees}° · 내부 방향 ${relativeRotation}°",
         )
     }
 }

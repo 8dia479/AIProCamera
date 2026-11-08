@@ -12,6 +12,7 @@ class PreviewTransformTest {
         assertEquals(90, land.rotationDegrees)
         assertEquals(3000, land.rotatedWidth)
         assertEquals(4000, land.rotatedHeight)
+        assertEquals(90, land.sensorOrientationDegrees)
 
         // Display#getRotation() is counter-clockwise. A rear-facing camera uses
         // sensorOrientation - displayRotation * (-1), so a 90° display turn yields 180°.

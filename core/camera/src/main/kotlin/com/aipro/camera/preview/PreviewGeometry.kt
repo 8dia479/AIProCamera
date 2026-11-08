@@ -7,7 +7,7 @@ package com.aipro.camera.preview
  * applied by Compose through Modifier.graphicsLayer + ContentScale.
  */
 data class PreviewGeometry(
-    /** Clockwise rotation in degrees to apply to the buffer (0/90/180/270). */
+    /** Relative sensor-to-display rotation; used for axis scaling, not applied twice to TextureView. */
     val rotationDegrees: Int,
     /** Size of the buffer as the camera delivers it (sensor orientation, before rotation). */
     val bufferWidth: Int = 0,
@@ -19,6 +19,8 @@ data class PreviewGeometry(
     /** Size of the buffer after rotation is applied. */
     val rotatedWidth: Int,
     val rotatedHeight: Int,
+    /** Physical CameraCharacteristics.SENSOR_ORIENTATION; TextureView handles this part. */
+    val sensorOrientationDegrees: Int = 0,
 ) {
     val aspectRatio: Float
         get() = if (rotatedHeight == 0) 0f else rotatedWidth.toFloat() / rotatedHeight
@@ -70,6 +72,7 @@ object PreviewTransform {
             fillScale = fillScale,
             rotatedWidth = rotatedWidth,
             rotatedHeight = rotatedHeight,
+            sensorOrientationDegrees = ((sensorOrientation % 360) + 360) % 360,
         )
     }
 

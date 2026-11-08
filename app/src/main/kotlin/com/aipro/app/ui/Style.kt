@@ -37,6 +37,14 @@ class SettingsStore(context: Context) {
                 .putBoolean(KEY_ROTATION_OFFSET_SEMANTICS, true)
                 .apply()
         }
+        // 1.3.9 makes the explicit sensor-correction offset zero by default.
+        // Reset a prior non-zero value once on upgrade; later user choices continue to persist.
+        if (!prefs.getBoolean(KEY_ROTATION_ZERO_DEFAULT_V3, false)) {
+            prefs.edit()
+                .putString(KEY_ROTATION_MODE, "0")
+                .putBoolean(KEY_ROTATION_ZERO_DEFAULT_V3, true)
+                .apply()
+        }
     }
 
     var uiStyle: CameraUiStyle
@@ -52,9 +60,8 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString(KEY_PURPOSE, value).apply()
 
     /**
-     * Preview rotation *offset* in degrees on top of the sensor/display rotation: "0" (default),
-     * "90", "180", "270" or "AUTO" (engine value, offset 0). The default 0 keeps the sensor
-     * rotation, which is what looks correct on the Flip 6.
+     * Additional manual sensor correction: "0" (default), "90", "180", "270", or "AUTO" (zero).
+     * TextureView handles the physical sensor orientation; this value adds no correction by default.
      */
     var previewRotationMode: String
         get() = prefs.getString(KEY_ROTATION_MODE, "0") ?: "0"
@@ -72,5 +79,6 @@ class SettingsStore(context: Context) {
         const val KEY_ASPECT = "last_aspect_ratio"
         const val KEY_ROTATION_MODE = "preview_rotation_mode"
         const val KEY_ROTATION_OFFSET_SEMANTICS = "preview_rotation_is_offset_v2"
+        const val KEY_ROTATION_ZERO_DEFAULT_V3 = "preview_rotation_zero_default_v3"
     }
 }
