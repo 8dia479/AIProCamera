@@ -32,6 +32,23 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 
+      - name: Install Qualcomm QNN runtime for Snapdragon 8 Gen 3
+        run: |
+          set -euo pipefail
+          SDK_URL="https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.50.0.260828/v2.50.0.260828.zip"
+          SDK_ROOT="qairt/2.50.0.260828"
+          mkdir -p core/ai/src/main/jniLibs/arm64-v8a
+          curl -fL --retry 3 "$SDK_URL" -o /tmp/qairt.zip
+          unzip -p /tmp/qairt.zip "$SDK_ROOT/lib/aarch64-android/libQnnSystem.so" > core/ai/src/main/jniLibs/arm64-v8a/libQnnSystem.so
+          unzip -p /tmp/qairt.zip "$SDK_ROOT/lib/aarch64-android/libQnnHtp.so" > core/ai/src/main/jniLibs/arm64-v8a/libQnnHtp.so
+          unzip -p /tmp/qairt.zip "$SDK_ROOT/lib/aarch64-android/libQnnHtpV75Stub.so" > core/ai/src/main/jniLibs/arm64-v8a/libQnnHtpV75Stub.so
+          unzip -p /tmp/qairt.zip "$SDK_ROOT/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so" > core/ai/src/main/jniLibs/arm64-v8a/libQnnHtpV75Skel.so
+          test -s core/ai/src/main/jniLibs/arm64-v8a/libQnnSystem.so
+          test -s core/ai/src/main/jniLibs/arm64-v8a/libQnnHtp.so
+          test -s core/ai/src/main/jniLibs/arm64-v8a/libQnnHtpV75Stub.so
+          test -s core/ai/src/main/jniLibs/arm64-v8a/libQnnHtpV75Skel.so
+          rm -f /tmp/qairt.zip
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
