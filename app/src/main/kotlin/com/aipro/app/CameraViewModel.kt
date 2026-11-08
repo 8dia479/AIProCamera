@@ -226,20 +226,21 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun setupAi() {
         viewModelScope.launch {
-            // Probe the real delegates; until this completes the UI must not claim NPU support.
+            enhanceQueue.state.collect { queue -> _ui.update { it.copy(aiQueue = queue) } }
+        }
+        viewModelScope.launch {
+            // Select the verified runtime before resuming any persisted enhancement jobs.
             val report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 BackendProbe.probe(getApplication())
             }
+            enhanceQueue.setBackend(report.selected)
             _ui.update { it.copy(aiBackend = report) }
             val models = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 modelManager.installed()
             }
             _ui.update { it.copy(installedModels = models) }
+            enhanceQueue.start()
         }
-        viewModelScope.launch {
-            enhanceQueue.state.collect { queue -> _ui.update { it.copy(aiQueue = queue) } }
-        }
-        enhanceQueue.start()
     }
 
     private fun syncRecordingState() {
@@ -865,6 +866,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             val report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 BackendProbe.probe(getApplication())
             }
+            enhanceQueue.setBackend(report.selected)
             _ui.update { it.copy(aiBackend = report, installedModels = modelManager.installed()) }
         }
     }
