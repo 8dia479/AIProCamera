@@ -213,10 +213,14 @@ class EnhanceQueue(
                 threads = governor.recommendedThreads(),
                 useGpu = false,
             ) ?: error("처리 파이프라인이 결과를 만들지 못했습니다")
-            bitmap.recycle()
             _state.update { it.copy(progress = 0.8f) }
 
-            val enhancedUri = destination.saveEnhanced(bitmap, record, result)
+            // saveEnhanced reads this bitmap; recycle only after the write completes.
+            val enhancedUri = try {
+                destination.saveEnhanced(bitmap, record, result)
+            } finally {
+                bitmap.recycle()
+            }
             if (enhancedUri == null) error("보정본 저장에 실패했습니다")
             val updated = record.copy(
                 enhancedUri = enhancedUri,
