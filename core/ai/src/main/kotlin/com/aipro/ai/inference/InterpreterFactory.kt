@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import com.aipro.common.AiproLog
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.Tensor
+import org.tensorflow.lite.Delegate
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -16,7 +17,7 @@ import java.nio.ByteOrder
  */
 class LiteRtInterpreter internal constructor(
     private val interpreter: Interpreter,
-    private val gpuDelegate: Closeable?,
+    private val delegate: AutoCloseable?,
     val inputShape: List<Int>,
     val outputShape: List<Int>,
     val inputDataType: String,
@@ -117,7 +118,7 @@ class LiteRtInterpreter internal constructor(
 
     override fun close() {
         runCatching { interpreter.close() }
-        runCatching { gpuDelegate?.close() }
+        runCatching { delegate?.close() }
     }
 }
 
@@ -133,26 +134,42 @@ object InterpreterFactory {
      * `useGpu` cannot be honoured here. Callers that want acceleration must use
      * [com.aipro.ai.inference.CompiledRunner].
      */
-    fun create(modelBuffer: ByteBuffer, threads: Int = 4, useGpu: Boolean = false): LiteRtInterpreter {
-        val options = Interpreter.Options()
-        options.setNumThreads(threads.coerceIn(1, 8))
-        if (useGpu) {
-            AiproLog.w(TAG, "LiteRT 2.3.2 Interpreter 경로에는 GPU 델리게이트가 없습니다 → CPU(XNNPACK) 사용")
+    fun create(
+        modelBuffer: ByteBuffer,
+        threads: Int = 4,
+        useNpu: Boolean = false,
+        nativeLibraryDir: String? = null,
+    ): LiteRtInterpreter {
+        val options = Interpreter.Options().apply {
+            setNumThreads(threads.coerceIn(1, 8))
         }
-        var gpuDelegate: Closeable? = null
-        val interpreter = Interpreter(modelBuffer, options)
-        val inputTensor: Tensor = interpreter.getInputTensor(0)
-        val outputTensor: Tensor = interpreter.getOutputTensor(0)
-        return LiteRtInterpreter(
-            interpreter = interpreter,
-            gpuDelegate = gpuDelegate,
-            inputShape = inputTensor.shape().toList(),
-            outputShape = outputTensor.shape().toList(),
-            inputDataType = inputTensor.dataType().toString(),
-            inputIsQuantized = inputTensor.dataType() == org.tensorflow.lite.DataType.UINT8 ||
-                inputTensor.dataType() == org.tensorflow.lite.DataType.INT8,
-            outputIsQuantized = outputTensor.dataType() == org.tensorflow.lite.DataType.UINT8 ||
-                outputTensor.dataType() == org.tensorflow.lite.DataType.INT8,
-        )
+        var delegate: Delegate? = null
+        var interpreter: Interpreter? = null
+        try {
+            if (useNpu) {
+                delegate = QualcommNpuDelegate.create(
+                    nativeLibraryDir ?: error("QNN native library 경로가 없습니다"),
+                )
+                options.addDelegate(delegate)
+            }
+            interpreter = Interpreter(modelBuffer, options)
+            val inputTensor: Tensor = interpreter.getInputTensor(0)
+            val outputTensor: Tensor = interpreter.getOutputTensor(0)
+            return LiteRtInterpreter(
+                interpreter = interpreter,
+                delegate = delegate,
+                inputShape = inputTensor.shape().toList(),
+                outputShape = outputTensor.shape().toList(),
+                inputDataType = inputTensor.dataType().toString(),
+                inputIsQuantized = inputTensor.dataType() == org.tensorflow.lite.DataType.UINT8 ||
+                    inputTensor.dataType() == org.tensorflow.lite.DataType.INT8,
+                outputIsQuantized = outputTensor.dataType() == org.tensorflow.lite.DataType.UINT8 ||
+                    outputTensor.dataType() == org.tensorflow.lite.DataType.INT8,
+            )
+        } catch (error: Throwable) {
+            runCatching { interpreter?.close() }
+            runCatching { delegate?.close() }
+            throw error
+        }
     }
 }
