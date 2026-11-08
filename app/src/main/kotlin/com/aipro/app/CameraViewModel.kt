@@ -20,6 +20,7 @@ import com.aipro.camera.engine.StillFormat
 import com.aipro.camera.engine.VideoOutcome
 import com.aipro.camera.video.LivePreviewProcessor
 import com.aipro.camera.video.VideoJob
+import com.aipro.camera.video.HorizonSample
 import com.aipro.camera.video.VideoPostProcessor
 import com.aipro.camera.stabilizer.HorizonLockController
 import com.aipro.app.video.VideoEnhanceScheduler
@@ -138,6 +139,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     private val videoScheduler = VideoEnhanceScheduler(app)
 
     private val horizonController = HorizonLockController(app)
+    private val recordingHorizonSamples = mutableListOf<HorizonSample>()
+    private var lastHorizonSampleUs = 0L
 
     private var liveProcessor: LivePreviewProcessor? = null
     private var previewTextureRef: android.graphics.SurfaceTexture? = null
@@ -210,6 +213,16 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 // The preview matrix (TextureView.setTransform) applies the leveling, so the GL tone
                 // chain must NOT rotate as well or the frame would be leveled twice.
                 controller.setHorizonRoll(roll)
+                val recordingStartedAt = _ui.value.recordingStartedAt
+                if (recordingStartedAt != null && _ui.value.horizonLock) {
+                    val timeUs = ((System.currentTimeMillis() - recordingStartedAt).coerceAtLeast(0L)) * 1_000L
+                    synchronized(recordingHorizonSamples) {
+                        if (timeUs - lastHorizonSampleUs >= 30_000L) {
+                            recordingHorizonSamples += HorizonSample(timeUs, roll)
+                            lastHorizonSampleUs = timeUs
+                        }
+                    }
+                }
                 val now = System.nanoTime()
                 if (now - lastUiUpdateNanos > 200_000_000L) {
                     lastUiUpdateNanos = now
@@ -768,6 +781,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleRecording() {
         val state = _ui.value
         if (state.recordingStartedAt != null) {
+            val recordedRoll = synchronized(recordingHorizonSamples) {
+                recordingHorizonSamples.toList().also {
+                    recordingHorizonSamples.clear()
+                    lastHorizonSampleUs = 0L
+                }
+            }
             viewModelScope.launch {
                 controller.stopRecording(sink)
                     .onSuccess { outcome ->
@@ -779,6 +798,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                             nightMode = state.nightMode,
                             tone = VideoPostProcessor.toneFor(state.purpose.name, state.nightMode),
                             horizonRollDegrees = currentHorizonRoll(),
+                            horizonSamples = recordedRoll,
                         )
                         refreshVideoJobs()
                         _ui.update {
@@ -792,6 +812,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                     .onFailure { error -> _ui.update { it.copy(message = "녹화 종료 실패: ${error.message}") } }
             }
         } else {
+            synchronized(recordingHorizonSamples) {
+                recordingHorizonSamples.clear()
+                lastHorizonSampleUs = 0L
+            }
             viewModelScope.launch {
                 val withAudio = getApplication<Application>().let {
                     androidx.core.content.ContextCompat.checkSelfPermission(it, Manifest.permission.RECORD_AUDIO) ==
