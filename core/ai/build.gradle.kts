@@ -27,9 +27,6 @@ dependencies {
     // LiteRT (the runtime formerly known as TensorFlow Lite) - fully on-device, no network.
     implementation(libs.litert)
     implementation(libs.litert.gpu)
-    // Qualcomm AI Engine Direct QNN HTP delegate for Snapdragon NPU acceleration.
-    implementation("com.qualcomm.qti:qnn-runtime:2.34.0")
-    implementation("com.qualcomm.qti:qnn-litert-delegate:2.34.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
