@@ -79,7 +79,7 @@ class CameraController(context: Context) {
         private const val MAX_STILL_PIXELS = 12_500_000L
 
         private const val CAPTURE_TIMEOUT_MS = 12_000L
-        private const val CONVERGENCE_TIMEOUT_MS = 650L
+        private const val CONVERGENCE_TIMEOUT_MS = 450L
 
         // Storage layout from spec section 12.
         const val ORIGINAL_IMAGE_DIR = "Pictures/AIProCamera/Original"
@@ -684,6 +684,8 @@ class CameraController(context: Context) {
         val characteristics = characteristics ?: return null
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         previewSurface?.let { if (it in sessionSurfaces) builder.addTarget(it) }
+        // The recorder surface must receive repeating frames; adding it to the session is not enough.
+        recorder?.surface?.let { if (it in sessionSurfaces) builder.addTarget(it) }
         analysisReader?.let { if (it.surface in sessionSurfaces) builder.addTarget(it.surface) }
         CaptureRequestApplier.apply(builder, manual, characteristics, flashMode, cropAspect = streamAspect)
         if (mode == CaptureMode.VIDEO) {
@@ -811,7 +813,7 @@ class CameraController(context: Context) {
         )
 
         try {
-            if (manual.focusSlider01 == null) {
+            if (manual.focusSlider01 == null && !isConverged()) {
                 triggerPrecapture(session)
                 awaitConvergence()
             }
@@ -920,25 +922,26 @@ class CameraController(context: Context) {
         }
     }
 
-    /** Waits for AF/AE to settle instead of firing blind - the difference between a sharp and a soft frame. */
+    /** Skip a new AF/AE cycle when the live preview is already focused and exposed. */
+    private fun isConverged(): Boolean {
+        val result = lastResult ?: return false
+        val af = result.get(CaptureResult.CONTROL_AF_STATE)
+        val ae = result.get(CaptureResult.CONTROL_AE_STATE)
+        val afReady = af == null ||
+            af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+            af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
+            af == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED ||
+            af == CaptureResult.CONTROL_AF_STATE_INACTIVE
+        val aeReady = ae == null ||
+            ae == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+            ae == CaptureResult.CONTROL_AE_STATE_LOCKED ||
+            ae == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
+        return afReady && aeReady
+    }
+
     private suspend fun awaitConvergence() {
         withTimeoutOrNull(CONVERGENCE_TIMEOUT_MS) {
-            while (true) {
-                val result = lastResult
-                val af = result?.get(CaptureResult.CONTROL_AF_STATE)
-                val ae = result?.get(CaptureResult.CONTROL_AE_STATE)
-                val afReady = af == null ||
-                    af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-                    af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
-                    af == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED ||
-                    af == CaptureResult.CONTROL_AF_STATE_INACTIVE
-                val aeReady = ae == null ||
-                    ae == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
-                    ae == CaptureResult.CONTROL_AE_STATE_LOCKED ||
-                    ae == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
-                if (afReady && aeReady) return@withTimeoutOrNull
-                delay(30)
-            }
+            while (!isConverged()) delay(25)
         }
     }
 
@@ -1333,20 +1336,42 @@ class CameraController(context: Context) {
         recorderTarget = target
         recorderSize = Size(selection.size.width, selection.size.height)
         mode = CaptureMode.VIDEO
-        recreateSessionForRecording()
-        return withContext(Dispatchers.Main.immediate) {
-            runCatching {
-                recorder?.start()
-                applyRepeatingRequest()
-                recordStartedAt = System.currentTimeMillis()
-                _state.value = EngineState.Recording(cameraId ?: "", recordStartedAt)
-                recordStartedAt
-            }.onFailure {
-                AiproLog.e(TAG, "recorder start failed", it)
+        try {
+            val configured = withTimeoutOrNull(8_000L) {
+                recreateSessionForRecording()
+                true
+            } ?: false
+            check(configured) { "녹화 세션 구성 시간 초과" }
+            val started = withContext(Dispatchers.Main.immediate) {
+                runCatching {
+                    recorder?.start() ?: error("MediaRecorder가 준비되지 않았습니다")
+                    applyRepeatingRequest()
+                    recordStartedAt = System.currentTimeMillis()
+                    _state.value = EngineState.Recording(cameraId ?: "", recordStartedAt)
+                    recordStartedAt
+                }
+            }
+            started.onFailure { error ->
+                AiproLog.e(TAG, "recorder start failed", error)
+                closeSession()
                 releaseRecorder(deleteFile = true)
                 runCatching { sink.delete(target.uri) }
-                _state.value = EngineState.Error("녹화 시작 실패: ${it.message}", it)
+                recordStartedAt = 0L
+                mode = CaptureMode.PHOTO
+                recreateSession()
+                _state.value = EngineState.Error("녹화 시작 실패", error)
             }
+            return started
+        } catch (error: Throwable) {
+            AiproLog.e(TAG, "recording session setup failed", error)
+            closeSession()
+            releaseRecorder(deleteFile = true)
+            runCatching { sink.delete(target.uri) }
+            recordStartedAt = 0L
+            mode = CaptureMode.PHOTO
+            recreateSession()
+            _state.value = EngineState.Error("녹화 세션 구성 실패", error)
+            return Result.failure(error)
         }
     }
 
@@ -1379,8 +1404,14 @@ class CameraController(context: Context) {
     suspend fun stopRecording(sink: MediaSink): Result<VideoOutcome> {
         val target = recorderTarget ?: return Result.failure(IllegalStateException("녹화 중이 아닙니다"))
         val size = recorderSize ?: Size(1920, 1080)
+        // MediaRecorder.stop() can fail if no encoded sample has reached its muxer yet.
+        if (recordStartedAt > 0L) {
+            delay((650L - (System.currentTimeMillis() - recordStartedAt)).coerceAtLeast(0L))
+        }
+        runCatching { session?.stopRepeating() }
+        delay(80L)
         val duration = if (recordStartedAt > 0) System.currentTimeMillis() - recordStartedAt else 0L
-        val stopResult = runCatching { recorder?.stop() }
+        val stopResult = runCatching { recorder?.stop() ?: error("MediaRecorder가 사라졌습니다") }
         releaseRecorder(deleteFile = false)
         recordStartedAt = 0L
         mode = CaptureMode.PHOTO
