@@ -147,4 +147,3 @@ class PhotoEnhancer(
         return result.bitmap
     }
 }
-}
