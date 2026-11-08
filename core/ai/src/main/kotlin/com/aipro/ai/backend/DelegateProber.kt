@@ -56,22 +56,23 @@ internal class DelegateProber(private val context: Context) {
      */
     fun probeNpu(): BackendAvailability {
         val soc = "${android.os.Build.SOC_MANUFACTURER} ${android.os.Build.SOC_MODEL}".trim()
-        val accelerators = availableAccelerators()
-            ?: return BackendAvailability(AccelerationBackend.NPU_QNN, false, "LiteRT 런타임 초기화 실패 ($soc)")
-        if (accelerators.contains("NPU")) {
-            return BackendAvailability(AccelerationBackend.NPU_QNN, true, "LiteRT 런타임이 NPU 가속기 보고 ($soc)")
+        return runCatching {
+            val delegate = com.aipro.ai.inference.QualcommNpuDelegate.create(
+                context.applicationInfo.nativeLibraryDir,
+            )
+            delegate.close()
+            BackendAvailability(
+                AccelerationBackend.NPU_QNN,
+                true,
+                "Qualcomm QNN HTP 런타임 초기화 성공 ($soc) · 모델별 지원 연산은 실행 시 확인",
+            )
+        }.getOrElse { error ->
+            val reason = error.cause?.message ?: error.message ?: error.javaClass.simpleName
+            BackendAvailability(
+                AccelerationBackend.NPU_QNN,
+                false,
+                "QNN HTP 초기화 실패 ($soc): $reason",
+            )
         }
-        val htp = runCatching { System.loadLibrary("QnnHtp") }.isSuccess
-        val delegate = runCatching { System.loadLibrary("QnnTFLiteDelegate") }.isSuccess
-        val missing = when {
-            !htp && !delegate -> "libQnnHtp·libQnnTFLiteDelegate 모두 없음"
-            !htp -> "libQnnHtp 없음"
-            else -> "libQnnTFLiteDelegate 없음"
-        }
-        return BackendAvailability(
-            AccelerationBackend.NPU_QNN,
-            false,
-            "SoC $soc (Hexagon NPU는 하드웨어에 존재) · 앱에 QNN 런타임 미번들: $missing",
-        )
     }
 }
