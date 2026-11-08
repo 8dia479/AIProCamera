@@ -121,7 +121,7 @@ class SceneAnalyzer(private val models: ModelManager) {
         val buffer = ByteBuffer.allocateDirect(bytes.size).apply {
             order(ByteOrder.nativeOrder()); put(bytes); rewind()
         }
-        val interpreter: LiteRtInterpreter = com.aipro.ai.inference.InterpreterFactory.create(buffer, 4, useGpu = false)
+        val interpreter: LiteRtInterpreter = com.aipro.ai.inference.InterpreterFactory.create(buffer, threads = 4)
         interpreter.use { engine ->
             val inputWidth = inputShape.getOrNull(1) ?: 224
             val inputHeight = inputShape.getOrNull(2) ?: 224
