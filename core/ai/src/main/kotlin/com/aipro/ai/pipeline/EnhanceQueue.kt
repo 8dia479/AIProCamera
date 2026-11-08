@@ -1,6 +1,7 @@
 package com.aipro.ai.pipeline
 
 import android.graphics.Bitmap
+import com.aipro.ai.backend.AccelerationBackend
 import com.aipro.ai.performance.PerformanceGovernor
 import com.aipro.ai.scene.SceneAnalyzer
 import com.aipro.common.AiproLog
@@ -10,6 +11,8 @@ import com.aipro.common.ShootingPurpose
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -84,6 +87,11 @@ class EnhanceQueue(
     private val jobs = LinkedHashMap<String, CaptureRecord>()
 
     @Volatile private var upscaleFactor: Int = maxUpscale
+    @Volatile private var accelerationBackend: AccelerationBackend = AccelerationBackend.CPU_XNNPACK
+
+    fun setBackend(backend: AccelerationBackend) {
+        accelerationBackend = backend
+    }
 
     /** Upscaling is user-controlled and can change while the queue is running. */
     fun setMaxUpscale(factor: Int) {
@@ -200,19 +208,22 @@ class EnhanceQueue(
         updateStatus(record, ProcessingStatus.PROCESSING)
         val started = System.currentTimeMillis()
         try {
-            val bitmap = source.loadBitmap(record.originalUri, maxDimension)
-                ?: error("원본 이미지를 읽을 수 없습니다")
+            val bitmap = withContext(Dispatchers.IO) {
+                source.loadBitmap(record.originalUri, maxDimension)
+            } ?: error("원본 이미지를 읽을 수 없습니다")
             _state.update { it.copy(progress = 0.35f) }
             val purpose = runCatching { ShootingPurpose.valueOf(record.shootingPurpose) }
                 .getOrDefault(ShootingPurpose.AUTO)
-            val result = enhancer.enhance(
-                source = bitmap,
-                purpose = purpose,
-                nightEnabled = record.nightMode,
-                maxUpscale = if (level == PerformanceGovernor.Level.REDUCED) 1 else upscaleFactor,
-                threads = governor.recommendedThreads(),
-                useGpu = false,
-            ) ?: error("처리 파이프라인이 결과를 만들지 못했습니다")
+            val result = withContext(Dispatchers.Default) {
+                enhancer.enhance(
+                    source = bitmap,
+                    purpose = purpose,
+                    nightEnabled = record.nightMode,
+                    maxUpscale = if (level == PerformanceGovernor.Level.REDUCED) 1 else upscaleFactor,
+                    threads = governor.recommendedThreads(),
+                    backend = accelerationBackend,
+                )
+            } ?: error("처리 파이프라인이 결과를 만들지 못했습니다")
             _state.update { it.copy(progress = 0.8f) }
 
             // saveEnhanced reads this bitmap; recycle only after the write completes.
