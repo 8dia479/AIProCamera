@@ -58,7 +58,7 @@ internal class DelegateProber(private val context: Context) {
     fun probeNpu(): BackendAvailability {
         val soc = "${android.os.Build.SOC_MANUFACTURER} ${android.os.Build.SOC_MODEL}".trim()
         val supported = runCatching {
-            com.google.ai.edge.litert.BuiltinNpuAcceleratorProvider(context).isDeviceSupported()
+            com.google.ai.edge.litert.NpuCompatibilityChecker.Qualcomm.isDeviceSupported()
         }.getOrDefault(false)
         if (!supported) {
             return BackendAvailability(
