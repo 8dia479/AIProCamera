@@ -214,7 +214,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 // chain must NOT rotate as well or the frame would be leveled twice.
                 controller.setHorizonRoll(roll)
                 val recordingStartedAt = _ui.value.recordingStartedAt
-                if (recordingStartedAt != null && _ui.value.horizonLock) {
+                if (recordingStartedAt != null) {
                     val timeUs = ((System.currentTimeMillis() - recordingStartedAt).coerceAtLeast(0L)) * 1_000L
                     synchronized(recordingHorizonSamples) {
                         if (timeUs - lastHorizonSampleUs >= 30_000L) {
@@ -823,12 +823,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 controller.startRecording(sink, withAudio = withAudio)
                     .onSuccess {
-                        if (_ui.value.horizonLock) {
-                            synchronized(recordingHorizonSamples) {
-                                recordingHorizonSamples.clear()
-                                recordingHorizonSamples += HorizonSample(0L, currentHorizonRoll())
-                                lastHorizonSampleUs = 0L
-                            }
+                        synchronized(recordingHorizonSamples) {
+                            recordingHorizonSamples.clear()
+                            recordingHorizonSamples += HorizonSample(0L, currentHorizonRoll())
+                            lastHorizonSampleUs = 0L
                         }
                     }
                     .onFailure { error -> _ui.update { it.copy(message = "녹화 시작 실패: ${error.message}") } }
