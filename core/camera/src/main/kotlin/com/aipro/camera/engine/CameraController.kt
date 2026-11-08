@@ -1527,7 +1527,7 @@ class CameraController(context: Context) {
         if (degrees.isNaN()) return 0f
         val value = ((degrees % 360f) + 360f) % 360f
         val signed = if (value > 180f) value - 360f else value
-        return if (abs(signed) < 0.15f) 0f else signed
+        return if (abs(signed) < 0.75f) 0f else signed
     }
 
     /** EXIF orientation of a JPEG held in memory (0 if absent/unreadable). */
