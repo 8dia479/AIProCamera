@@ -8,6 +8,17 @@ import org.junit.Test
 class PreviewMathTest {
 
     @Test
+    fun `axis swapping follows the dominant quarter-turn`() {
+        assertEquals(false, PreviewMath.isAxisSwapped(0f))
+        assertEquals(false, PreviewMath.isAxisSwapped(30f))
+        assertEquals(true, PreviewMath.isAxisSwapped(60f))
+        assertEquals(true, PreviewMath.isAxisSwapped(90f))
+        assertEquals(true, PreviewMath.isAxisSwapped(270f))
+        assertEquals(false, PreviewMath.isAxisSwapped(180f))
+        assertEquals(false, PreviewMath.isAxisSwapped(330f))
+    }
+
+    @Test
     fun `no rotation keeps the plain cover scale`() {
         // 4:3 buffer in a square view: the height term (3000 -> 1000) is the binding one.
         assertEquals(1f / 3f, PreviewMath.coverScale(4000f, 3000f, 1000f, 1000f, 0f), 1e-4f)

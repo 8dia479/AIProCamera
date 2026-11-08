@@ -352,10 +352,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ horizon lock
 
     /**
-     * Experimental horizon lock (spec section 10). Needs real gyro + accelerometer samples, so the
-     * toggle only exists when [CameraUiState.horizonSupported] is true. Enabling it also turns the GL
-     * preview on, because the levelling is done in the shader — the plain TextureView path cannot
-     * rotate the frame, and pretending otherwise would be a fake UI.
+     * Experimental horizon lock. Sensor failures are contained here so an unavailable or busy
+     * sensor service cannot terminate the camera Activity.
      */
     fun toggleHorizonLock() {
         if (!horizonController.isSupported) {
@@ -364,21 +362,26 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         }
         val enable = !_ui.value.horizonLock
         if (enable) {
-            val started = horizonController.start()
+            val startResult = runCatching { horizonController.start() }
+            startResult.exceptionOrNull()?.let {
+                AiproLog.e("ViewModel", "horizon lock start failed", it)
+            }
+            val started = startResult.getOrDefault(false)
             controller.setHorizonRoll(if (started) horizonController.rollDegrees.value else 0f)
             _ui.update {
                 it.copy(
                     horizonLock = started,
                     horizonStatus = horizonController.statusLabel(),
-                    message = if (started) {
-                        "수평 잠금 켜짐 · 미리보기와 사진이 수평에 맞춰집니다 (동영상은 보정본 생성)"
-                    } else {
-                        "센서 등록 실패로 수평 잠금을 켤 수 없습니다"
+                    message = when {
+                        started -> "수평 잠금 켜짐 · 센서 기반 프리뷰/사진 수평 보정 (동영상은 후처리)"
+                        startResult.isFailure -> "수평 잠금 시작 실패: ${startResult.exceptionOrNull()?.message ?: "센서 오류"}"
+                        else -> "센서 등록 실패로 수평 잠금을 켤 수 없습니다"
                     },
                 )
             }
         } else {
-            horizonController.stop()
+            runCatching { horizonController.stop() }
+                .onFailure { AiproLog.e("ViewModel", "horizon lock stop failed", it) }
             controller.setHorizonRoll(0f)
             _ui.update { it.copy(horizonLock = false, horizonStatus = "꺼짐", horizonRollDegrees = 0f) }
         }
@@ -410,7 +413,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     val horizonRollFlow: kotlinx.coroutines.flow.StateFlow<Float> get() = horizonController.rollDegrees
 
     private fun currentHorizonRoll(): Float =
-        if (_ui.value.horizonLock && horizonController.isSupported) _ui.value.horizonRollDegrees else 0f
+        if (_ui.value.horizonLock && horizonController.isSupported) horizonController.rollDegrees.value else 0f
 
     fun refreshThermalState() {
         _ui.update { it.copy(thermalLabel = governor.thermalLabel(), thermalLevel = governor.level().name) }
@@ -869,6 +872,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeMessage() = _ui.update { it.copy(message = null) }
 
     override fun onCleared() {
+        // Release the sensor HandlerThread as well as camera/AI resources; otherwise recreating the
+        // Activity leaves an orphaned horizon-sensor thread behind.
+        runCatching { horizonController.close() }
+            .onFailure { AiproLog.e("ViewModel", "horizon sensor shutdown failed", it) }
         super.onCleared()
         enhanceQueue.shutdown()
         viewModelScope.launch { controller.shutdown() }

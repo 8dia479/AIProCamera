@@ -201,7 +201,7 @@ class CameraController(context: Context) {
     private var recordStartedAt = 0L
 
     @Volatile private var lastResult: CaptureResult? = null
-    private var pendingStill: PendingStill? = null
+    @Volatile private var pendingStill: PendingStill? = null
 
     private val closing = AtomicBoolean(false)
 
@@ -758,11 +758,17 @@ class CameraController(context: Context) {
             stillAspect,
             maxPixels = MAX_STILL_PIXELS,
         )
+        val jpegOrientation = PreviewTransform.jpegOrientation(
+            caps.sensorOrientation,
+            currentDisplayRotationDegrees(),
+            caps.facing == Facing.FRONT,
+        )
         pendingStill = PendingStill(
             target = imageTarget,
             rawTarget = rawTarget,
             deferred = deferred,
             crop = stillPlan?.cropRect,
+            orientationDegrees = jpegOrientation,
         )
 
         try {
@@ -774,14 +780,7 @@ class CameraController(context: Context) {
             jpegReader?.let { builder.addTarget(it.surface) }
             if (rawTarget != null) rawReader?.let { builder.addTarget(it.surface) }
             CaptureRequestApplier.apply(builder, manual, characteristics, flashMode, cropAspect = streamAspect)
-            builder.set(
-                CaptureRequest.JPEG_ORIENTATION,
-                PreviewTransform.jpegOrientation(
-                    caps.sensorOrientation,
-                    currentDisplayRotationDegrees(),
-                    caps.facing == Facing.FRONT,
-                ),
-            )
+            builder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
             builder.set(CaptureRequest.CONTROL_AF_MODE, afModeForCapture(characteristics))
             session.capture(builder.build(), stillCallback, handler)
 
@@ -907,10 +906,25 @@ class CameraController(context: Context) {
         runCatching {
             val buffer = image.planes[0].buffer
             val rawBytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
-            val crop = pending?.crop
+            val crop = pending.crop
             val levelRoll = normalizeRoll(horizonRollDegrees)
-            val bytes = if (crop != null || levelRoll != 0f) {
-                renderJpeg(rawBytes, stillAspect.ratio, levelRoll) ?: rawBytes
+            val exifNeedsNormalization =
+                exifOrientation(rawBytes) != android.media.ExifInterface.ORIENTATION_NORMAL
+            val expectedPortrait = pending.orientationDegrees % 180 != 0
+            val pixelsPortrait = image.height > image.width
+            val pixelAxesNeedNormalization =
+                image.width != image.height && expectedPortrait != pixelsPortrait
+            // Normalize orientation tags into the actual pixels. Some HAL paths write only EXIF,
+            // while others already rotate the JPEG buffer; dimension checks avoid double rotation.
+            val bytes = if (
+                crop != null || levelRoll != 0f || exifNeedsNormalization || pixelAxesNeedNormalization
+            ) {
+                renderJpeg(
+                    rawBytes,
+                    stillAspect.ratio,
+                    levelRoll,
+                    pending.orientationDegrees,
+                ) ?: rawBytes
             } else {
                 rawBytes
             }
@@ -1414,6 +1428,7 @@ class CameraController(context: Context) {
         val rawTarget: SinkTarget?,
         val deferred: CompletableDeferred<Result<StillMeta>>,
         val crop: CropRect? = null,
+        val orientationDegrees: Int = 0,
     )
 
     /** Rolls below this are sensor noise, not a real tilt; re-encoding for them would be wasteful. */
@@ -1469,49 +1484,70 @@ class CameraController(context: Context) {
         bytes: ByteArray,
         aspect: Float,
         rollDegrees: Float,
+        fallbackOrientationDegrees: Int,
         quality: Int = 98,
     ): ByteArray? = runCatching {
-        val options = BitmapFactory.Options()
-        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
-        val orientationRotation = exifRotationDegrees(exifOrientation(bytes))
-        val pixelsLandscape = source.width >= source.height
-        // The requested ratio is defined in the landscape frame; in a portrait pixel buffer the same
-        // framing is its reciprocal.
-        val cropAspect = when {
-            aspect <= 0.05f -> source.width.toFloat() / source.height
-            pixelsLandscape -> aspect
-            else -> 1f / aspect
+        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val exifRotation = exifRotationDegrees(exifOrientation(bytes))
+        val sourcePortrait = source.height > source.width
+        val expectedPortrait = fallbackOrientationDegrees % 180 != 0
+        val axesMismatch = source.width != source.height && sourcePortrait != expectedPortrait
+
+        // Prefer the camera request's orientation when the decoded pixels have the wrong axes.
+        // If the pixels already have the expected portrait/landscape shape, strip a redundant
+        // quarter-turn EXIF tag instead of applying it a second time. A 180° EXIF tag still matters.
+        val orientationRotation = when {
+            axesMismatch && fallbackOrientationDegrees % 180 != 0 ->
+                ((fallbackOrientationDegrees % 360) + 360) % 360
+            axesMismatch && exifRotation % 180 != 0 -> exifRotation
+            axesMismatch -> 90
+            exifRotation % 180 == 0 -> exifRotation
+            else -> 0
         }
         val totalRotation = orientationRotation - rollDegrees
-        val (cropWidth, cropHeight) = PreviewMath.largestInscribedAspectRect(
+        val sourceAspect = if (source.width >= source.height) aspect else 1f / aspect
+        val outputAspect = if (PreviewMath.isAxisSwapped(totalRotation)) {
+            1f / sourceAspect
+        } else {
+            sourceAspect
+        }
+        val (outWidth, outHeight) = PreviewMath.largestInscribedAspectRect(
             source.width,
             source.height,
-            cropAspect,
+            outputAspect,
             totalRotation,
         )
-        val swapped = orientationRotation == 90 || orientationRotation == 270
-        val outWidth = if (swapped) cropHeight else cropWidth
-        val outHeight = if (swapped) cropWidth else cropHeight
         val output = Bitmap.createBitmap(outWidth, outHeight, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(output)
-        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
-        val fill = PreviewMath.levelFillScale(source.width, source.height, cropWidth, cropHeight, totalRotation)
-        val matrix = Matrix()
-        matrix.postTranslate(-source.width / 2f, -source.height / 2f)
-        matrix.postScale(fill, fill)
-        matrix.postRotate(totalRotation.toFloat())
-        matrix.postTranslate(outWidth / 2f, outHeight / 2f)
-        canvas.drawBitmap(source, matrix, paint)
-        val out = java.io.ByteArrayOutputStream(outWidth * outHeight / 4)
-        output.compress(Bitmap.CompressFormat.JPEG, quality, out)
-        AiproLog.i(
-            TAG,
-            "render ${source.width}x${source.height} → ${outWidth}x${outHeight} " +
-                "(ratio=$aspect exif=${orientationRotation}° roll=${"%.1f".format(rollDegrees)}°)",
-        )
-        source.recycle()
-        output.recycle()
-        out.toByteArray()
+        try {
+            val canvas = android.graphics.Canvas(output)
+            val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+            // Use the post-rotation output bounds. Passing the pre-rotation crop dimensions here
+            // left unused pixels/cropping at 90° and made horizon-locked photos look corrupted.
+            val fill = PreviewMath.levelFillScale(
+                source.width,
+                source.height,
+                outWidth,
+                outHeight,
+                totalRotation,
+            )
+            val matrix = Matrix()
+            matrix.postTranslate(-source.width / 2f, -source.height / 2f)
+            matrix.postScale(fill, fill)
+            matrix.postRotate(totalRotation)
+            matrix.postTranslate(outWidth / 2f, outHeight / 2f)
+            canvas.drawBitmap(source, matrix, paint)
+            val out = java.io.ByteArrayOutputStream()
+            if (!output.compress(Bitmap.CompressFormat.JPEG, quality, out)) return null
+            AiproLog.i(
+                TAG,
+                "render ${source.width}x${source.height} → ${outWidth}x${outHeight} " +
+                    "(ratio=$aspect exif=${exifRotation}° applied=${orientationRotation}° roll=${"%.1f".format(rollDegrees)}°)",
+            )
+            out.toByteArray()
+        } finally {
+            source.recycle()
+            output.recycle()
+        }
     }.onFailure { AiproLog.e(TAG, "ratio/level render failed", it) }.getOrNull()
 
     private data class StillMeta(

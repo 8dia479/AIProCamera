@@ -82,6 +82,17 @@ object PreviewMath {
         return maxOf(byWidth, byHeight)
     }
 
+    /**
+     * Whether a rotation makes the output's width/height axes exchange places.
+     * The 45° boundaries keep the output aspect stable around 0°/180° and switch it for
+     * portrait-oriented quadrants around 90°/270°.
+     */
+    fun isAxisSwapped(angleDegrees: Float): Boolean {
+        val normalized = ((angleDegrees % 360f) + 360f) % 360f
+        return (normalized >= 45f && normalized < 135f) ||
+            (normalized >= 225f && normalized < 315f)
+    }
+
     /** Image rotation (degrees) that levels a device roll. Front camera mirroring flips the sign. */
     fun levelingRotation(rollDegrees: Float, mirrored: Boolean): Float =
         if (mirrored) rollDegrees else -rollDegrees

@@ -66,14 +66,23 @@ fun CameraPreview(
     val latestGeometry by rememberUpdatedState(geometry)
     val latestRoll by rememberUpdatedState(rollDegrees)
     val latestOffset by rememberUpdatedState(rotationOffset)
-    val bufferAspect = bufferAspectOf(geometry, displayAspect)
     val rotationDegrees = geometry?.rotationDegrees ?: 0
+    val effectiveRotation = PreviewMath.baseRotation(rotationDegrees, rotationOffset)
+    // A quarter-turn offset swaps the visible frame's axes as well as the image.
+    val baseSwapsAxes = rotationDegrees == 90 || rotationDegrees == 270
+    val effectiveSwapsAxes = effectiveRotation == 90 || effectiveRotation == 270
+    val effectiveDisplayAspect = if (baseSwapsAxes != effectiveSwapsAxes && displayAspect > 0f) {
+        1f / displayAspect
+    } else {
+        displayAspect
+    }
+    val bufferAspect = bufferAspectOf(geometry, effectiveDisplayAspect)
 
     val density = LocalDensity.current
     BoxWithConstraints(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // The visible frame: exactly the ratio the photo will have.
-        val box: Pair<Dp, Dp> = fitInside(maxWidth, maxHeight, displayAspect)
-        val quarterTurn = rotationDegrees == 90 || rotationDegrees == 270
+        // The visible frame follows the *effective* sensor + user offset rotation.
+        val box: Pair<Dp, Dp> = fitInside(maxWidth, maxHeight, effectiveDisplayAspect)
+        val quarterTurn = effectiveSwapsAxes
         // Size for the *rotated* image, then undo the quarter turn for the view itself, so the
         // unrotated view is larger than the box and only gets clipped - never upscaled.
         val shown = fitInside(box.first, box.second, if (quarterTurn) 1f / bufferAspect else bufferAspect)
@@ -131,7 +140,15 @@ fun CameraPreview(
             )
 
             // Roll is a 60 Hz signal: it is applied straight to the View, not through recomposition.
-            LaunchedEffect(textureView, boxWidthPx, boxHeightPx, rotationDegrees, rollDegrees, rotationOffset) {
+            LaunchedEffect(
+                textureView,
+                boxWidthPx,
+                boxHeightPx,
+                effectiveRotation,
+                geometry?.mirrored,
+                rollDegrees,
+                rotationOffset,
+            ) {
                 val view = textureView ?: return@LaunchedEffect
                 val apply = { roll: Float ->
                     applyViewTransform(
