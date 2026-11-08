@@ -78,7 +78,7 @@ internal object CompiledModelRunner {
         val attempts = buildList {
             if (preferNpu && supportsNpu && available.contains("NPU")) {
                 add(
-                    Accelerator.NPU to CompiledModel.Options(Accelerator.NPU).apply {
+                    Accelerator.NPU to CompiledModel.Options(Accelerator.NPU, Accelerator.GPU, Accelerator.CPU).apply {
                         qualcommOptions = CompiledModel.QualcommOptions(
                             htpPerformanceMode = CompiledModel.QualcommOptions.HtpPerformanceMode.HIGH_PERFORMANCE,
                         )
