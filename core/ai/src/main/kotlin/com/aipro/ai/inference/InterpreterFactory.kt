@@ -17,7 +17,7 @@ import java.nio.ByteOrder
  */
 class LiteRtInterpreter internal constructor(
     private val interpreter: Interpreter,
-    private val delegate: AutoCloseable?,
+    private val delegate: Delegate?,
     val inputShape: List<Int>,
     val outputShape: List<Int>,
     val inputDataType: String,
@@ -118,7 +118,7 @@ class LiteRtInterpreter internal constructor(
 
     override fun close() {
         runCatching { interpreter.close() }
-        runCatching { delegate?.close() }
+        QualcommNpuDelegate.release(delegate)
     }
 }
 
@@ -168,7 +168,7 @@ object InterpreterFactory {
             )
         } catch (error: Throwable) {
             runCatching { interpreter?.close() }
-            runCatching { delegate?.close() }
+            QualcommNpuDelegate.release(delegate)
             throw error
         }
     }
