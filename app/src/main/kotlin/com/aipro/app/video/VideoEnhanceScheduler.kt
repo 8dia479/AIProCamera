@@ -28,6 +28,7 @@ class VideoEnhanceScheduler(private val context: Context) {
         nightMode: Boolean,
         tone: com.aipro.camera.video.VideoTone,
         horizonRollDegrees: Float = 0f,
+        horizonSamples: List<com.aipro.camera.video.HorizonSample> = emptyList(),
     ): VideoJob {
         val job = VideoJob(
             id = UUID.randomUUID().toString(),
@@ -37,6 +38,7 @@ class VideoEnhanceScheduler(private val context: Context) {
             nightMode = nightMode,
             tone = tone,
             horizonRollDegrees = horizonRollDegrees,
+            horizonSamples = horizonSamples,
             status = VideoJobStatus.PENDING,
         )
         store.save(job)
