@@ -15,6 +15,13 @@ enum class VideoJobStatus { PENDING, RUNNING, PAUSED, DONE, FAILED }
  * resumed run continue where it stopped instead of restarting the file.
  */
 @Serializable
+data class HorizonSample(
+    /** Microseconds from the first recorded frame. */
+    val timeUs: Long,
+    val rollDegrees: Float,
+)
+
+@Serializable
 data class VideoJob(
     val id: String,
     val createdAtEpochMs: Long,
@@ -25,6 +32,8 @@ data class VideoJob(
     val tone: VideoTone = VideoTone(),
     // Experimental horizon-lock roll captured when the recording was made (degrees, 0 = off).
     val horizonRollDegrees: Float = 0f,
+    /** Time-varying horizon correction captured during recording. */
+    val horizonSamples: List<HorizonSample> = emptyList(),
     val width: Int = 0,
     val height: Int = 0,
     val rotationDegrees: Int = 0,
