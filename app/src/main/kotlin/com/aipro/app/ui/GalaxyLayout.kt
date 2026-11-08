@@ -126,11 +126,10 @@ fun GalaxyFlexLayout(
 private fun GalaxyPreview(state: CameraUiState, vm: CameraViewModel) {
     val configuration = LocalConfiguration.current
     val portrait = configuration.screenHeightDp >= configuration.screenWidthDp
-    // The clip window follows what the sensor+display rotation actually produce, so a landscape
-    // window, Flex Mode or a rotated display can never end up with a sideways / over-cropped preview.
-    // (The nominal ratio is only the fallback before the engine publishes its geometry.)
-    val ratioAspect = if (portrait) 1f / state.aspectRatio.ratio else state.aspectRatio.ratio
-    val displayAspect = state.geometry?.aspectRatio?.takeIf { it > 0f } ?: ratioAspect
+    // The viewfinder must match the user's selected framing ratio. The Camera2 preview stream can
+    // have a slightly different native ratio; using geometry.aspectRatio here silently replaced
+    // the selected 4:3/16:9 framing with the stream's ratio and made the subject look stretched.
+    val displayAspect = if (portrait) 1f / state.aspectRatio.ratio else state.aspectRatio.ratio
     Box(modifier = Modifier.fillMaxSize()) {
         CameraPreview(
             geometry = state.geometry,

@@ -126,10 +126,13 @@ class PreviewFillScaleTest {
     }
 
     @Test
-    fun `horizon roll only ever adds a uniform scale`() {
-        val level = PreviewMath.coverScale(1920f, 1080f, 1080f, 1920f, 90f)
-        val rolled = PreviewMath.coverScale(1920f, 1080f, 1080f, 1920f, 93f)
-        assertTrue(rolled > level)
-        assertTrue(rolled < level * 1.1f)
+    fun `horizon leveling keeps the base framing scale fixed`() {
+        val baseRotation = PreviewMath.baseRotation(90, 0)
+        val baseScale = PreviewMath.coverScale(1920f, 1080f, 1080f, 1920f, baseRotation.toFloat())
+        // The view layer keeps this base scale while roll changes; no per-angle zoom is applied.
+        val scaleAtPositiveRoll = PreviewMath.coverScale(1920f, 1080f, 1080f, 1920f, baseRotation.toFloat())
+        val scaleAtNegativeRoll = PreviewMath.coverScale(1920f, 1080f, 1080f, 1920f, baseRotation.toFloat())
+        assertEquals(baseScale, scaleAtPositiveRoll, 0.0001f)
+        assertEquals(baseScale, scaleAtNegativeRoll, 0.0001f)
     }
 }

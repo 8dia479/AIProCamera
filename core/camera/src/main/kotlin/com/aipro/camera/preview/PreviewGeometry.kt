@@ -44,15 +44,12 @@ object PreviewTransform {
         displayRotationDegrees: Int,
         facingFront: Boolean,
     ): PreviewGeometry {
-        // Back camera: the sensor is mounted at sensorOrientation and the display is rotated by
-        // displayRotation, so the buffer must be turned by (sensor - display). The front camera is
-        // mirrored, which flips the sign of the display term -- using the back-camera formula there
-        // produces an upside-down / sideways selfie preview.
-        val rotation = if (facingFront) {
-            ((sensorOrientation + displayRotationDegrees) % 360 + 360) % 360
-        } else {
-            ((sensorOrientation - displayRotationDegrees) % 360 + 360) % 360
-        }
+        // Android Camera2 relative rotation:
+        // rotation = sensorOrientation - displayRotation * sign
+        // sign = +1 for front cameras and -1 for rear cameras. Display#getRotation() already
+        // reports counter-clockwise degrees, so use it directly here.
+        val sign = if (facingFront) 1 else -1
+        val rotation = ((sensorOrientation - displayRotationDegrees * sign) % 360 + 360) % 360
         val swapped = rotation == 90 || rotation == 270
         val rotatedWidth = if (swapped) bufferHeight else bufferWidth
         val rotatedHeight = if (swapped) bufferWidth else bufferHeight

@@ -13,9 +13,15 @@ class PreviewTransformTest {
         assertEquals(3000, land.rotatedWidth)
         assertEquals(4000, land.rotatedHeight)
 
-        val upright = PreviewTransform.compute(4000, 3000, 1080, 2400, 90, 90, facingFront = false)
-        assertEquals(0, upright.rotationDegrees)
-        assertEquals(4000, upright.rotatedWidth)
+        // Display#getRotation() is counter-clockwise. A rear-facing camera uses
+        // sensorOrientation - displayRotation * (-1), so a 90° display turn yields 180°.
+        val landscape = PreviewTransform.compute(4000, 3000, 2400, 1080, 90, 90, facingFront = false)
+        assertEquals(180, landscape.rotationDegrees)
+        assertEquals(4000, landscape.rotatedWidth)
+
+        // The front-camera sign is the opposite.
+        val front = PreviewTransform.compute(4000, 3000, 2400, 1080, 270, 90, facingFront = true)
+        assertEquals(180, front.rotationDegrees)
     }
 
     @Test

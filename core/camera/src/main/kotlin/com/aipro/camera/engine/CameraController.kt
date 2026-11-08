@@ -112,7 +112,7 @@ class CameraController(context: Context) {
 
     private var cameraId: String? = null
     private var device: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
+    @Volatile private var session: CameraCaptureSession? = null
     private var repeatingRequest: CaptureRequest? = null
     private var characteristics: CameraCharacteristics? = null
 
@@ -244,7 +244,13 @@ class CameraController(context: Context) {
 
     // ------------------------------------------------------------------ preview
 
-    /** Binds the UI's SurfaceTexture. The engine owns buffer sizing so the preview never stretches. */
+    /**
+     * Binds the UI SurfaceTexture. A view layout-size change is NOT a camera-stream change:
+     * keep the same Surface and capture session unless the SurfaceTexture or requested buffer
+     * resolution actually changes. The old code compared viewWidth/viewHeight and rebuilt the
+     * CameraCaptureSession during normal Compose remeasurement, which made the shutter race a null
+     * session ("프리뷰 세션이 준비되지 않았습니다").
+     */
     fun attachPreviewTexture(texture: SurfaceTexture, viewWidth: Int, viewHeight: Int) {
         viewSize = Size(viewWidth.coerceAtLeast(1), viewHeight.coerceAtLeast(1))
         val id = cameraId ?: run {
@@ -255,27 +261,27 @@ class CameraController(context: Context) {
             previewTexture = texture
             return
         }
+
         val newPreviewSize = choosePreviewSize(caps, viewSize)
-        // Rebuilding the session for every layout pass is what left the first frame black and made
-        // the user change the ratio (which forces a rebuild) to see anything at all.
-        val sameTarget = previewTexture === texture &&
-            previewSurface != null &&
-            previewSurfaceOwnedByEngine &&
-            newPreviewSize == previewSize &&
-            viewSize == lastAttachedViewSize
+        val surfaceChanged = previewTexture !== texture ||
+            previewSurface == null ||
+            !previewSurfaceOwnedByEngine
+        val streamChanged = newPreviewSize != previewSize
+
         previewTexture = texture
-        if (sameTarget && session != null) {
-            updateGeometry(caps)
-            return
-        }
-        previewSize = newPreviewSize
         lastAttachedViewSize = viewSize
-        texture.setDefaultBufferSize(previewSize.width, previewSize.height)
-        if (previewSurfaceOwnedByEngine) previewSurface?.release()
-        previewSurface = Surface(texture)
-        previewSurfaceOwnedByEngine = true
+        if (streamChanged) previewSize = newPreviewSize
+        if (surfaceChanged || streamChanged) {
+            texture.setDefaultBufferSize(previewSize.width, previewSize.height)
+        }
+        if (surfaceChanged) {
+            if (previewSurfaceOwnedByEngine) previewSurface?.release()
+            previewSurface = Surface(texture)
+            previewSurfaceOwnedByEngine = true
+        }
+
         updateGeometry(caps)
-        if (device != null) {
+        if (device != null && (surfaceChanged || streamChanged)) {
             handler.post { recreateSession() }
         }
     }
@@ -288,13 +294,19 @@ class CameraController(context: Context) {
         viewSize = Size(viewWidth.coerceAtLeast(1), viewHeight.coerceAtLeast(1))
         val id = cameraId ?: return
         val caps = capabilities(id) ?: return
-        previewSize = choosePreviewSize(caps, viewSize)
-        if (previewSurfaceOwnedByEngine) previewSurface?.release()
-        previewSurface = surface
-        previewSurfaceOwnedByEngine = false
+        val newPreviewSize = choosePreviewSize(caps, viewSize)
+        val surfaceChanged = previewSurface !== surface || previewSurfaceOwnedByEngine
+        val streamChanged = newPreviewSize != previewSize
+
+        if (streamChanged) previewSize = newPreviewSize
+        if (surfaceChanged) {
+            if (previewSurfaceOwnedByEngine) previewSurface?.release()
+            previewSurface = surface
+            previewSurfaceOwnedByEngine = false
+        }
         previewTexture = null
         updateGeometry(caps)
-        if (device != null) {
+        if (device != null && (surfaceChanged || streamChanged)) {
             handler.post { recreateSession() }
         }
     }
@@ -441,12 +453,21 @@ class CameraController(context: Context) {
         if (stillAspect == option) return false
         stillAspect = option
         val caps = cameraId?.let { capabilities(it) } ?: return true
+
+        val oldStillSize = stillSize
+        val oldPreviewSize = previewSize
         stillSize = chooseStillSize(caps)
         previewSize = choosePreviewSize(caps, viewSize)
         alignStillToPreview(caps)
-        previewTexture?.let { attachPreviewTexture(it, viewSize.width, viewSize.height) }
+
+        // Update the existing SurfaceTexture buffer in place. Do not call attachPreviewTexture()
+        // here: it used to cause a second recreateSession() in addition to the one below.
+        previewTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
+        updateGeometry(caps)
         publishActiveCamera(caps)
-        if (device != null && mode == CaptureMode.PHOTO) {
+
+        val streamConfigurationChanged = oldStillSize != stillSize || oldPreviewSize != previewSize
+        if (device != null && mode == CaptureMode.PHOTO && streamConfigurationChanged) {
             handler.post { recreateSession() }
         }
         return true
@@ -638,9 +659,25 @@ class CameraController(context: Context) {
     }
 
     private fun recreateSession() {
+        if (_state.value !is EngineState.Recording) {
+            _state.value = EngineState.Opening(cameraId ?: "")
+        }
         closeSession()
         createSessionIfReady()
     }
+
+    /**
+     * Session reconfiguration is asynchronous. Callers such as the shutter must wait for the new
+     * configured session instead of immediately returning a misleading "preview session not ready".
+     */
+    private suspend fun awaitReadySession(timeoutMs: Long = 8_000L): CameraCaptureSession? =
+        withTimeoutOrNull(timeoutMs) {
+            while (!closing.get()) {
+                session?.let { return@withTimeoutOrNull it }
+                delay(25)
+            }
+            null
+        }
 
     private fun buildPreviewRequest(): CaptureRequest? {
         val device = device ?: return null
@@ -732,8 +769,9 @@ class CameraController(context: Context) {
         request: StillCaptureRequest = StillCaptureRequest(),
     ): Result<CaptureOutcome> {
         val caps = cameraId?.let { capabilities(it) } ?: return Result.failure(IllegalStateException("카메라가 열려 있지 않습니다"))
-        val session = session ?: return Result.failure(IllegalStateException("프리뷰 세션이 준비되지 않았습니다"))
         if (mode != CaptureMode.PHOTO) return Result.failure(IllegalStateException("사진 모드가 아닙니다"))
+        val session = awaitReadySession()
+            ?: return Result.failure(IllegalStateException("카메라 세션 재구성 대기 시간 초과 · 프리뷰 상태를 확인해 주세요"))
         if (request.format != StillFormat.JPEG) {
             return Result.failure(UnsupportedOperationException("${request.format} 출력은 아직 구현되지 않았습니다 (JPEG만 지원)"))
         }
@@ -1039,6 +1077,8 @@ class CameraController(context: Context) {
         val caps = cameraId?.let { capabilities(it) } ?: return Result.failure(IllegalStateException("카메라가 열려 있지 않습니다"))
         val characteristics = characteristics ?: return Result.failure(IllegalStateException("카메라 특성 없음"))
         if (mode != CaptureMode.PHOTO) return Result.failure(IllegalStateException("사진 모드가 아닙니다"))
+        val session = awaitReadySession()
+            ?: return Result.failure(IllegalStateException("카메라 세션 재구성 대기 시간 초과 · 프리뷰 상태를 확인해 주세요"))
         if (multiFrameReader == null) {
             createSessionIfReady()
             if (multiFrameReader == null) return Result.failure(IllegalStateException("멀티프레임 리더를 만들 수 없습니다"))

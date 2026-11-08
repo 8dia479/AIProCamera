@@ -197,21 +197,27 @@ internal fun applyViewTransform(
     val viewHeight = view.height.toFloat()
     if (viewWidth <= 0f || viewHeight <= 0f || boxWidthPx <= 0f || boxHeightPx <= 0f) return
 
-    val rotation = PreviewMath.totalRotation(PreviewMath.baseRotation(rotationDegrees, offset), roll, mirrored)
-    val scale = PreviewMath.coverScale(viewWidth, viewHeight, boxWidthPx, boxHeightPx, rotation)
+    val baseRotation = PreviewMath.baseRotation(rotationDegrees, offset)
+    val rotation = PreviewMath.totalRotation(baseRotation, roll, mirrored)
+
+    // Do not recalculate cover scale from the live horizon angle. That made the camera zoom in
+    // continuously as the phone rolled. Keep the framing fixed; black corner wedges are preferable
+    // to a changing focal length/FOV while horizon lock is active.
+    val scale = PreviewMath.coverScale(viewWidth, viewHeight, boxWidthPx, boxHeightPx, baseRotation)
         .coerceIn(0.5f, 4f)
 
     view.rotation = rotation
     view.scaleX = if (mirrored) -scale else scale
     view.scaleY = scale
 
+    val userOffset = offset ?: 0
     val signature = "buf=${viewWidth.toInt()}x${viewHeight.toInt()} box=${boxWidthPx.toInt()}x${boxHeightPx.toInt()} " +
-        "rot=${rotation.toInt()} scale=${"%.2f".format(scale)} roll=${"%.1f".format(roll)}"
+        "sensorFix=${rotationDegrees} offset=${userOffset} scale=${"%.2f".format(scale)} roll=${"%.1f".format(roll)}"
     if (signature != lastLoggedSignature) {
         lastLoggedSignature = signature
         android.util.Log.i("AIProPreview", signature)
         PreviewDiag.publish(
-            "센서 ${rotationDegrees}° · 회전 ${rotation.toInt()}° · 채움 ${"%.2f".format(scale)}×",
+            "센서 보정 ${rotationDegrees}° · 사용자 보정 ${userOffset}° · 수평 ${"%.1f".format(roll)}°",
         )
     }
 }
