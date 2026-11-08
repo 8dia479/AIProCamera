@@ -32,6 +32,7 @@ class ToneShaderProgram {
     private var texMatrixLocation = 0
     private var rollLocation = 0
     private var zoomLocation = 0
+    private var aspectLocation = 0
     private var stretchLocation = 0
     private var contrastLocation = 0
     private var saturationLocation = 0
@@ -71,6 +72,7 @@ class ToneShaderProgram {
         texMatrixLocation = GLES20.glGetUniformLocation(program, "uTexMatrix")
         rollLocation = GLES20.glGetUniformLocation(program, "uRollRadians")
         zoomLocation = GLES20.glGetUniformLocation(program, "uZoom")
+        aspectLocation = GLES20.glGetUniformLocation(program, "uAspect")
         stretchLocation = GLES20.glGetUniformLocation(program, "uStretch")
         contrastLocation = GLES20.glGetUniformLocation(program, "uContrast")
         saturationLocation = GLES20.glGetUniformLocation(program, "uSaturation")
@@ -88,6 +90,7 @@ class ToneShaderProgram {
         zoom: Float = 1f,
         texelWidth: Float = 0f,
         texelHeight: Float = 0f,
+        aspect: Float = 1f,
     ) {
         if (program == 0) return
         GLES20.glUseProgram(program)
@@ -96,7 +99,8 @@ class ToneShaderProgram {
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glUniformMatrix4fv(texMatrixLocation, 1, false, texMatrix, 0)
         GLES20.glUniform1f(rollLocation, rollRadians)
-        GLES20.glUniform1f(zoomLocation, zoom.coerceIn(1f, 1.5f))
+        GLES20.glUniform1f(zoomLocation, zoom.coerceIn(1f, 2.5f))
+        GLES20.glUniform1f(aspectLocation, aspect.takeIf { it.isFinite() && it > 0f }?.coerceIn(0.1f, 10f) ?: 1f)
         GLES20.glUniform2f(
             stretchLocation,
             tone.stretchLow.coerceIn(0, 254).toFloat() / 255f,
@@ -158,14 +162,15 @@ class ToneShaderProgram {
             uniform mat4 uTexMatrix;
             uniform float uRollRadians;
             uniform float uZoom;
+            uniform float uAspect;
             varying vec2 vTexCoord;
             void main() {
-                // Horizon-lock roll: zoom in just enough to keep the frame filled, then rotate the
-                // sampling coordinates around the frame centre.
-                vec2 uv = (aTexCoord.xy - vec2(0.5, 0.5)) / uZoom;
+                // Rotate in pixel space; normalized UV rotation distorts wide video frames.
+                vec2 p = vec2((aTexCoord.x - 0.5) * uAspect, aTexCoord.y - 0.5) / uZoom;
                 float c = cos(uRollRadians);
                 float s = sin(uRollRadians);
-                uv = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c) + vec2(0.5, 0.5);
+                p = vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+                vec2 uv = vec2(p.x / uAspect, p.y) + vec2(0.5, 0.5);
                 vTexCoord = (uTexMatrix * vec4(uv, 0.0, 1.0)).xy;
                 gl_Position = aPosition;
             }
