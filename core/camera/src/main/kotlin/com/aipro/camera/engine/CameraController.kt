@@ -1150,7 +1150,15 @@ class CameraController(context: Context) {
             val mergedCrop = RatioSizing.centeredCrop(SizeInfo(width, height), stillAspect.ratio)
             val mergedRoll = normalizeRoll(horizonRollDegrees)
             val mergedBytes = if (mergedCrop != null || mergedRoll != 0f) {
-                renderJpeg(jpegOut.toByteArray(), stillAspect.ratio, mergedRoll) ?: jpegOut.toByteArray()
+                // Multi-frame JPEG is encoded directly from the sensor-oriented YUV buffer and receives
+                // its display rotation as EXIF in CameraViewModel.writeJpegWithOrientation(). Keep this
+                // render in sensor coordinates; the later EXIF tag rotates it exactly once.
+                renderJpeg(
+                    jpegOut.toByteArray(),
+                    stillAspect.ratio,
+                    mergedRoll,
+                    fallbackOrientationDegrees = 0,
+                ) ?: jpegOut.toByteArray()
             } else {
                 jpegOut.toByteArray()
             }
