@@ -27,7 +27,10 @@ internal object CompiledModelRunner {
     private fun environment(context: Context, useNpu: Boolean): Environment {
         sharedEnvironment?.let { return it }
         val app = context.applicationContext
-        val env = if (useNpu && BuiltinNpuAcceleratorProvider(app).isDeviceSupported()) {
+        val env = if (useNpu) {
+            // LiteRT's Qualcomm compiler plugin dispatches through the QAIRT shared libraries.
+            System.loadLibrary("QnnSystem")
+            System.loadLibrary("QnnHtp")
             Environment.create(app, BuiltinNpuAcceleratorProvider(app))
         } else {
             Environment.create(app)
@@ -74,7 +77,13 @@ internal object CompiledModelRunner {
 
         val attempts = buildList {
             if (preferNpu && supportsNpu && available.contains("NPU")) {
-                add(Accelerator.NPU to CompiledModel.Options(Accelerator.NPU))
+                add(
+                    Accelerator.NPU to CompiledModel.Options(Accelerator.NPU).apply {
+                        qualcommOptions = CompiledModel.QualcommOptions(
+                            htpPerformanceMode = CompiledModel.QualcommOptions.HtpPerformanceMode.HIGH_PERFORMANCE,
+                        )
+                    },
+                )
             }
             if (preferGpu && available.contains("GPU")) {
                 add(Accelerator.GPU to CompiledModel.Options(Accelerator.GPU, Accelerator.CPU))
