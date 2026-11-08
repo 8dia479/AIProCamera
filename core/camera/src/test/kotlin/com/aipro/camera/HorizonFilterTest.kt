@@ -87,6 +87,18 @@ class HorizonFilterTest {
     }
 
     @Test
+    fun `fill zoom accounts for non square video pixels`() {
+        val filter = HorizonFilter()
+        val angle = Math.toRadians(45.0).toFloat()
+        val squareZoom = filter.fillZoom(angle, 1f)
+        val wideZoom = filter.fillZoom(angle, 16f / 9f)
+        assertTrue("wide=$wideZoom square=$squareZoom", wideZoom > squareZoom)
+        val c = kotlin.math.abs(kotlin.math.cos(angle))
+        val s = kotlin.math.abs(kotlin.math.sin(angle))
+        assertTrue(wideZoom >= c + s * (16f / 9f) - 0.001f)
+    }
+
+    @Test
     fun `disagreement grows while the gyro moves and settles when it stops`() {
         val filter = HorizonFilter()
         filter.onAccelerometer(0f, g, 0f, 0L)
