@@ -37,6 +37,7 @@ internal class VideoSegmentEncoder(
     private val sourceWidth: Int,
     private val sourceHeight: Int,
     private val horizonRollDegrees: Float = 0f,
+    private val horizonSamples: List<HorizonSample> = emptyList(),
     private val frameRate: Int = 30,
 ) {
 
@@ -161,9 +162,7 @@ internal class VideoSegmentEncoder(
         var decoderDone = false
         var encoderDone = false
         val filter = HorizonFilter()
-        val rollRadians = Math.toRadians(horizonRollDegrees.toDouble()).toFloat()
         val frameAspect = width.toFloat() / height.coerceAtLeast(1)
-        val fillZoom = filter.fillZoom(rollRadians, frameAspect)
         val texelX = 1f / width.toFloat()
         val texelY = 1f / height.toFloat()
 
@@ -200,6 +199,12 @@ internal class VideoSegmentEncoder(
                         GLES20.glViewport(0, 0, width, height)
                         GLES20.glClearColor(0f, 0f, 0f, 1f)
                         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                        // Interpolate the phone roll at this frame's presentation timestamp.
+                        // The encoder viewport stays width×height for every frame, so only the
+                        // inscribed crop changes; the output aspect ratio cannot wobble with tilt.
+                        val rollDegrees = rollAt(ptsUs)
+                        val rollRadians = Math.toRadians(rollDegrees.toDouble()).toFloat()
+                        val fillZoom = filter.fillZoom(rollRadians, frameAspect)
                         shader.draw(
                             textureId = outputSurface.textureId,
                             texMatrix = texMatrix,
@@ -327,6 +332,26 @@ internal class VideoSegmentEncoder(
             GLES20.GL_CLAMP_TO_EDGE,
         )
         return textures[0]
+    }
+
+
+    /** Shortest-path interpolation between sensor samples; falls back to the legacy fixed roll. */
+    private fun rollAt(timeUs: Long): Float {
+        if (horizonSamples.isEmpty()) return horizonRollDegrees
+        val first = horizonSamples.first()
+        val last = horizonSamples.last()
+        if (timeUs <= first.timeUs) return first.rollDegrees
+        if (timeUs >= last.timeUs) return last.rollDegrees
+        val rightIndex = horizonSamples.binarySearch { it.timeUs.compareTo(timeUs) }
+            .let { if (it >= 0) it else -it - 1 }
+        val right = horizonSamples[rightIndex]
+        val left = horizonSamples[rightIndex - 1]
+        val span = (right.timeUs - left.timeUs).coerceAtLeast(1L)
+        val fraction = ((timeUs - left.timeUs).toFloat() / span).coerceIn(0f, 1f)
+        var delta = (right.rollDegrees - left.rollDegrees) % 360f
+        if (delta > 180f) delta -= 360f
+        if (delta < -180f) delta += 360f
+        return left.rollDegrees + delta * fraction
     }
 
     companion object {
