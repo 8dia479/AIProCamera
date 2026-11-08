@@ -822,6 +822,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                         PackageManager.PERMISSION_GRANTED
                 }
                 controller.startRecording(sink, withAudio = withAudio)
+                    .onSuccess {
+                        if (_ui.value.horizonLock) {
+                            synchronized(recordingHorizonSamples) {
+                                recordingHorizonSamples.clear()
+                                recordingHorizonSamples += HorizonSample(0L, currentHorizonRoll())
+                                lastHorizonSampleUs = 0L
+                            }
+                        }
+                    }
                     .onFailure { error -> _ui.update { it.copy(message = "녹화 시작 실패: ${error.message}") } }
             }
         }
