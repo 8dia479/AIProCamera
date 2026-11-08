@@ -72,6 +72,7 @@ class VideoPostProcessor(private val context: Context) {
                 sourceWidth = info.width,
                 sourceHeight = info.height,
                 horizonRollDegrees = job.horizonRollDegrees,
+                horizonSamples = job.horizonSamples,
             )
 
             val parts = current.completedSegments.toMutableList()
