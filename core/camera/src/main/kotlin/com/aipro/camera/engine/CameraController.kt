@@ -79,7 +79,8 @@ class CameraController(context: Context) {
         private const val MAX_STILL_PIXELS = 12_500_000L
 
         private const val CAPTURE_TIMEOUT_MS = 12_000L
-        private const val CONVERGENCE_TIMEOUT_MS = 450L
+        private const val CONVERGENCE_TIMEOUT_MS = 160L
+        private const val MIN_RECORDING_READY_MS = 1_200L
 
         // Storage layout from spec section 12.
         const val ORIGINAL_IMAGE_DIR = "Pictures/AIProCamera/Original"
@@ -813,7 +814,10 @@ class CameraController(context: Context) {
         )
 
         try {
-            if (manual.focusSlider01 == null && !isConverged()) {
+            // Reuse the live AF/AE solution for ordinary shots. A forced precapture cycle
+            // can add 300–450 ms even when the preview is already usable. Only request a
+            // fresh convergence pass when flash is enabled, where exposure timing matters.
+            if (manual.focusSlider01 == null && flashMode != FlashMode.OFF && !isConverged()) {
                 triggerPrecapture(session)
                 awaitConvergence()
             }
@@ -1404,13 +1408,17 @@ class CameraController(context: Context) {
     suspend fun stopRecording(sink: MediaSink): Result<VideoOutcome> {
         val target = recorderTarget ?: return Result.failure(IllegalStateException("녹화 중이 아닙니다"))
         val size = recorderSize ?: Size(1920, 1080)
-        // MediaRecorder.stop() can fail if no encoded sample has reached its muxer yet.
-        if (recordStartedAt > 0L) {
-            delay((650L - (System.currentTimeMillis() - recordStartedAt)).coerceAtLeast(0L))
+        // MediaRecorder.stop() throws "stop failed" when the encoder has not produced a
+        // complete MP4 sample/keyframe yet. Samsung's camera/HEVC pipeline can take longer
+        // to emit its first decodable sample, so keep the recorder running for at least 1.2 s.
+        val elapsed = if (recordStartedAt > 0L) System.currentTimeMillis() - recordStartedAt else 0L
+        if (recordStartedAt > 0L && elapsed < MIN_RECORDING_READY_MS) {
+            delay(MIN_RECORDING_READY_MS - elapsed)
         }
-        runCatching { session?.stopRepeating() }
-        delay(80L)
         val duration = if (recordStartedAt > 0) System.currentTimeMillis() - recordStartedAt else 0L
+        runCatching { session?.stopRepeating() }
+        // Do not insert an arbitrary post-stop delay: stop() must finalize the muxer while the
+        // MediaRecorder still owns its surface and file descriptor.
         val stopResult = runCatching { recorder?.stop() ?: error("MediaRecorder가 사라졌습니다") }
         releaseRecorder(deleteFile = false)
         recordStartedAt = 0L
