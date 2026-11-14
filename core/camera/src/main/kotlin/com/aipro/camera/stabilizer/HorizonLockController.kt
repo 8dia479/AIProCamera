@@ -81,18 +81,25 @@ class HorizonLockController(context: Context) : SensorEventListener {
         synchronized(filterLock) { filter.reset() }
         lastPublishedTimestampNanos = 0L
 
-        val registrationOk = if (gameRotationVector != null) {
-            // Request ~200 Hz; the sensor HAL may choose a lower supported cadence.
-            runCatching {
-                manager.registerListener(this, gameRotationVector, 5_000, handler)
-            }.getOrDefault(false)
+        // Request ~200 Hz from the fused 3-D sensor; if the HAL rejects it, fall back
+        // to the previous gyro + accelerometer estimator.
+        val vectorOk = gameRotationVector?.let { sensor ->
+            runCatching { manager.registerListener(this, sensor, 5_000, handler) }.getOrDefault(false)
+        } ?: false
+        val registrationOk = if (vectorOk) {
+            true
         } else {
-            val gyroOk = runCatching {
-                manager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME, handler)
-            }.getOrDefault(false)
-            val accelOk = runCatching {
-                manager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME, handler)
-            }.getOrDefault(false)
+            manager.unregisterListener(this)
+            val gyroOk = gyroscope?.let { sensor ->
+                runCatching {
+                    manager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME, handler)
+                }.getOrDefault(false)
+            } ?: false
+            val accelOk = accelerometer?.let { sensor ->
+                runCatching {
+                    manager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME, handler)
+                }.getOrDefault(false)
+            } ?: false
             gyroOk && accelOk
         }
 
