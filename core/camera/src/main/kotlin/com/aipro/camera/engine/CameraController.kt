@@ -200,6 +200,7 @@ class CameraController(context: Context) {
     private var recorderTarget: SinkTarget? = null
     private var recorderSize: Size? = null
     private var recordStartedAt = 0L
+    @Volatile private var videoCaptureFrameCount = 0L
 
     @Volatile private var lastResult: CaptureResult? = null
     @Volatile private var pendingStill: PendingStill? = null
@@ -750,7 +751,42 @@ class CameraController(context: Context) {
         }
     }
 
+    /**
+     * Recording must not silently continue when Camera2 rejects the repeating request.
+     * The previous path swallowed this exception and left MediaRecorder running with an
+     * empty MP4, which only surfaced later as "stop failed".
+     */
+    private fun applyRecordingRepeatingRequest() {
+        val activeSession = session ?: error("녹화 세션이 없습니다")
+        val request = buildPreviewRequest() ?: error("녹화 요청을 만들 수 없습니다")
+        val recorderSurface = recorder?.surface ?: error("MediaRecorder surface가 없습니다")
+        check(recorderSurface in request.targets) { "녹화 요청에 MediaRecorder surface가 없습니다" }
+        repeatingRequest = request
+        @Suppress("DEPRECATION")
+        activeSession.setRepeatingRequest(request, repeatingCallback, handler)
+        AiproLog.i(TAG, "record repeating request accepted; targets=${request.targets.size}")
+    }
+
     private val repeatingCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureStarted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            timestamp: Long,
+            frameNumber: Long,
+        ) {
+            if (mode == CaptureMode.VIDEO) videoCaptureFrameCount++
+        }
+
+        override fun onCaptureFailed(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            failure: android.hardware.camera2.CaptureFailure,
+        ) {
+            if (mode == CaptureMode.VIDEO) {
+                AiproLog.e(TAG, "record capture failed frame=${failure.frameNumber} reason=${failure.reason}")
+            }
+        }
+
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
             request: CaptureRequest,
@@ -1363,7 +1399,8 @@ class CameraController(context: Context) {
             val started = withContext(Dispatchers.Main.immediate) {
                 runCatching {
                     recorder?.start() ?: error("MediaRecorder가 준비되지 않았습니다")
-                    applyRepeatingRequest()
+                    applyRecordingRepeatingRequest()
+                    videoCaptureFrameCount = 0L
                     recordStartedAt = System.currentTimeMillis()
                     _state.value = EngineState.Recording(cameraId ?: "", recordStartedAt)
                     recordStartedAt
@@ -1430,6 +1467,7 @@ class CameraController(context: Context) {
             delay(MIN_RECORDING_READY_MS - elapsed)
         }
         val duration = if (recordStartedAt > 0) System.currentTimeMillis() - recordStartedAt else 0L
+        AiproLog.i(TAG, "stopping recording durationMs=$duration cameraFrames=$videoCaptureFrameCount")
         runCatching { session?.stopRepeating() }
         // Do not insert an arbitrary post-stop delay: stop() must finalize the muxer while the
         // MediaRecorder still owns its surface and file descriptor.
@@ -1470,10 +1508,9 @@ class CameraController(context: Context) {
     }
 
     private fun preferredVideoEncoder(): Int {
-        val hevcSupported = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-            info.isEncoder && info.supportedTypes.any { type -> type.equals("video/hevc", ignoreCase = true) }
-        }
-        return if (hevcSupported) MediaRecorder.VideoEncoder.HEVC else MediaRecorder.VideoEncoder.H264
+        // Use the broadly supported AVC path as the stable baseline. A device may advertise
+        // HEVC encoders that are not usable by MediaRecorder for the selected camera size/profile.
+        return MediaRecorder.VideoEncoder.H264
     }
 
     // -------------------------------------------------------------------- teardown
