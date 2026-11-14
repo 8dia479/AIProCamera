@@ -760,7 +760,9 @@ class CameraController(context: Context) {
         val activeSession = session ?: error("녹화 세션이 없습니다")
         val request = buildPreviewRequest() ?: error("녹화 요청을 만들 수 없습니다")
         val recorderSurface = recorder?.surface ?: error("MediaRecorder surface가 없습니다")
-        check(recorderSurface in request.targets) { "녹화 요청에 MediaRecorder surface가 없습니다" }
+        // CaptureRequest does not expose its target list on Android; verify the surface
+        // belongs to the active recording session. buildPreviewRequest adds it as a target.
+        check(recorderSurface in sessionSurfaces) { "녹화 세션에 MediaRecorder surface가 없습니다" }
         repeatingRequest = request
         @Suppress("DEPRECATION")
         activeSession.setRepeatingRequest(request, repeatingCallback, handler)
