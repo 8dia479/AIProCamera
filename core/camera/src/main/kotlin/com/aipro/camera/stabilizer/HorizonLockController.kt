@@ -148,8 +148,8 @@ class HorizonLockController(context: Context) : SensorEventListener {
             // The rotation vector fuses gyro + gravity in 3-D. Extract gravity direction
             // in device coordinates, then calculate the camera horizon angle in the screen plane.
             SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-            val gx = rotationMatrix[2]
-            val gy = rotationMatrix[5]
+            val gx = rotationMatrix[6]
+            val gy = rotationMatrix[7]
             if (hypot(gx.toDouble(), gy.toDouble()) < 0.05) {
                 _rollDegrees.value
             } else {
