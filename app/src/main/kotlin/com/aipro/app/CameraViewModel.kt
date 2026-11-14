@@ -141,6 +141,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     private val horizonController = HorizonLockController(app)
     private val recordingHorizonSamples = mutableListOf<HorizonSample>()
     private var lastHorizonSampleUs = 0L
+    @Volatile private var recordingSensorStartNanos = 0L
 
     private var liveProcessor: LivePreviewProcessor? = null
     private var previewTextureRef: android.graphics.SurfaceTexture? = null
@@ -204,7 +205,23 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 thermalLevel = governor.level().name,
             )
         }
-        // Sensor roll feeds the live shader and is recorded on the job so post-processing matches.
+        // Capture the fused sensor stream directly at sensor cadence for video. The UI
+        // StateFlow is intentionally not used for this: it can conflate fast samples.
+        horizonController.onSample = { timestampNanos, roll ->
+            val startedAt = recordingSensorStartNanos
+            if (startedAt > 0L) {
+                val timeUs = ((timestampNanos - startedAt).coerceAtLeast(0L)) / 1_000L
+                synchronized(recordingHorizonSamples) {
+                    if (timeUs - lastHorizonSampleUs >= 5_000L) {
+                        recordingHorizonSamples += HorizonSample(timeUs, roll)
+                        lastHorizonSampleUs = timeUs
+                    }
+                }
+            }
+        }
+
+        // Sensor roll feeds the live preview and photo capture. Video samples are captured
+        // separately above so they retain the full sensor timestamp cadence.
         viewModelScope.launch {
             // 50 Hz sensor data goes straight to the renderer. Recomposition is throttled to 5 Hz,
             // which is what made the screen feel frozen when horizon lock was switched on.
@@ -213,16 +230,6 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 // The preview matrix (TextureView.setTransform) applies the leveling, so the GL tone
                 // chain must NOT rotate as well or the frame would be leveled twice.
                 controller.setHorizonRoll(roll)
-                val recordingStartedAt = _ui.value.recordingStartedAt
-                if (recordingStartedAt != null) {
-                    val timeUs = ((System.currentTimeMillis() - recordingStartedAt).coerceAtLeast(0L)) * 1_000L
-                    synchronized(recordingHorizonSamples) {
-                        if (timeUs - lastHorizonSampleUs >= 30_000L) {
-                            recordingHorizonSamples += HorizonSample(timeUs, roll)
-                            lastHorizonSampleUs = timeUs
-                        }
-                    }
-                }
                 val now = System.nanoTime()
                 if (now - lastUiUpdateNanos > 200_000_000L) {
                     lastUiUpdateNanos = now
@@ -781,7 +788,13 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleRecording() {
         val state = _ui.value
         if (state.recordingStartedAt != null) {
+            val sensorStart = recordingSensorStartNanos
+            recordingSensorStartNanos = 0L
             val recordedRoll = synchronized(recordingHorizonSamples) {
+                if (sensorStart > 0L) {
+                    val endUs = ((System.nanoTime() - sensorStart).coerceAtLeast(0L)) / 1_000L
+                    recordingHorizonSamples += HorizonSample(endUs, horizonController.rollDegrees.value)
+                }
                 recordingHorizonSamples.toList().also {
                     recordingHorizonSamples.clear()
                     lastHorizonSampleUs = 0L
@@ -827,6 +840,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                             recordingHorizonSamples.clear()
                             recordingHorizonSamples += HorizonSample(0L, currentHorizonRoll())
                             lastHorizonSampleUs = 0L
+                            recordingSensorStartNanos = System.nanoTime()
                         }
                     }
                     .onFailure { error -> _ui.update { it.copy(message = "녹화 시작 실패: ${error.message}") } }
