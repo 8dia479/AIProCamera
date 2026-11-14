@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.hypot
 
 /**
  * Gyroscope + accelerometer horizon estimator.
@@ -24,6 +26,10 @@ import kotlin.math.abs
 class HorizonLockController(context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    // Fused 3-D orientation is preferred: integrating only gyro Z loses tracking when the
+    // phone rotates around more than one device axis.
+    private val gameRotationVector: Sensor? =
+        sensorManager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
     private val gyroscope: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
     private val accelerometer: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val filter = HorizonFilter()
@@ -33,21 +39,28 @@ class HorizonLockController(context: Context) : SensorEventListener {
     @Volatile private var sensorHandler: Handler? = null
     private var lastPublishedTimestampNanos = 0L
 
+    /** Receives every fused sensor sample for timestamp-accurate video stabilization. */
+    @Volatile
+    var onSample: ((timestampNanos: Long, rollDegrees: Float) -> Unit)? = null
+
+    private val rotationMatrix = FloatArray(9)
+
     private val _rollDegrees = MutableStateFlow(0f)
     val rollDegrees: StateFlow<Float> = _rollDegrees.asStateFlow()
 
     private val _active = MutableStateFlow(false)
     val active: StateFlow<Boolean> = _active.asStateFlow()
 
-    /** Both sensors are required; a device with only one must not show the toggle. */
-    val isSupported: Boolean get() = gyroscope != null && accelerometer != null
+    /** Prefer the fused game rotation vector; retain gyro+accelerometer as a fallback. */
+    val isSupported: Boolean
+        get() = gameRotationVector != null || (gyroscope != null && accelerometer != null)
 
     val unsupportedReason: String?
         get() = when {
             sensorManager == null -> "SensorManager 없음"
-            gyroscope == null && accelerometer == null -> "자이로/가속도 센서 없음"
-            gyroscope == null -> "자이로스코프 없음"
-            accelerometer == null -> "가속도계 없음"
+            gameRotationVector == null && gyroscope == null && accelerometer == null -> "회전/자이로/가속도 센서 없음"
+            gameRotationVector == null && gyroscope == null -> "자이로스코프 없음"
+            gameRotationVector == null && accelerometer == null -> "가속도계 없음"
             else -> null
         }
 
@@ -68,21 +81,29 @@ class HorizonLockController(context: Context) : SensorEventListener {
         synchronized(filterLock) { filter.reset() }
         lastPublishedTimestampNanos = 0L
 
-        val gyroOk = runCatching {
-            manager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME, handler)
-        }.getOrDefault(false)
-        val accelOk = runCatching {
-            manager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME, handler)
-        }.getOrDefault(false)
+        val registrationOk = if (gameRotationVector != null) {
+            // Request ~200 Hz; the sensor HAL may choose a lower supported cadence.
+            runCatching {
+                manager.registerListener(this, gameRotationVector, 5_000, handler)
+            }.getOrDefault(false)
+        } else {
+            val gyroOk = runCatching {
+                manager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME, handler)
+            }.getOrDefault(false)
+            val accelOk = runCatching {
+                manager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME, handler)
+            }.getOrDefault(false)
+            gyroOk && accelOk
+        }
 
-        if (!gyroOk || !accelOk) {
+        if (!registrationOk) {
             manager.unregisterListener(this)
             handler.removeCallbacksAndMessages(null)
             thread.quitSafely()
             sensorHandler = null
             sensorThread = null
             _active.value = false
-            AiproLog.e(TAG, "센서 리스너 등록 실패 gyro=$gyroOk accel=$accelOk")
+            AiproLog.e(TAG, "센서 리스너 등록 실패 rotationVector=${gameRotationVector != null}")
             return false
         }
 
@@ -108,42 +129,50 @@ class HorizonLockController(context: Context) : SensorEventListener {
     fun close() = stop()
 
     fun renderState(): Pair<Float, Float> = synchronized(filterLock) {
-        filter.rollRadians() to filter.fillZoom()
+        val radians = Math.toRadians(_rollDegrees.value.toDouble()).toFloat()
+        radians to filter.fillZoom(radians)
     }
 
     fun statusLabel(): String {
         if (!isSupported) return unsupportedReason ?: "지원 안 함"
         if (!_active.value) return "꺼짐"
-        val (disagreement, roll) = synchronized(filterLock) {
-            filter.disagreement to filter.roll
-        }
+        val roll = _rollDegrees.value
+        if (gameRotationVector != null) return "3축 수평 추적 · ${"%.1f".format(roll)}°"
+        val disagreement = synchronized(filterLock) { filter.disagreement }
         return if (disagreement > 8f) "동작 감지 · 보정 완만" else "수평 ${"%.1f".format(roll)}°"
     }
 
     override fun onSensorChanged(event: SensorEvent) {
         if (!_active.value) return
-        val roll = synchronized(filterLock) {
-            when (event.sensor.type) {
-                Sensor.TYPE_GYROSCOPE -> filter.onGyroscope(event.values[2], event.timestamp)
-                Sensor.TYPE_ACCELEROMETER -> filter.onAccelerometer(
-                    event.values[0],
-                    event.values[1],
-                    event.values[2],
-                    event.timestamp,
-                )
-                else -> return
+        val roll = if (event.sensor.type == Sensor.TYPE_GAME_ROTATION_VECTOR) {
+            // The rotation vector fuses gyro + gravity in 3-D. Extract gravity direction
+            // in device coordinates, then calculate the camera horizon angle in the screen plane.
+            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+            val gx = rotationMatrix[2]
+            val gy = rotationMatrix[5]
+            if (hypot(gx.toDouble(), gy.toDouble()) < 0.05) {
+                _rollDegrees.value
+            } else {
+                val raw = Math.toDegrees(atan2(gx.toDouble(), gy.toDouble())).toFloat()
+                ((raw + 180f) % 360f + 360f) % 360f - 180f
+            }
+        } else {
+            synchronized(filterLock) {
+                when (event.sensor.type) {
+                    Sensor.TYPE_GYROSCOPE -> filter.onGyroscope(event.values[2], event.timestamp)
+                    Sensor.TYPE_ACCELEROMETER -> filter.onAccelerometer(
+                        event.values[0], event.values[1], event.values[2], event.timestamp,
+                    )
+                    else -> return
+                }
             }
         }
 
-        // SensorManager may deliver the gyro much faster than the display refresh rate. The filter
-        // still consumes each event; only StateFlow publication is throttled.
-        if (
-            lastPublishedTimestampNanos == 0L ||
-            event.timestamp - lastPublishedTimestampNanos >= 16_000_000L
-        ) {
-            lastPublishedTimestampNanos = event.timestamp
-            _rollDegrees.value = roll
-        }
+        _rollDegrees.value = roll
+        lastPublishedTimestampNanos = event.timestamp
+        // Record every sensor timestamp directly; a conflated StateFlow is not precise enough
+        // for fast rotations during video.
+        runCatching { onSample?.invoke(event.timestamp, roll) }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
