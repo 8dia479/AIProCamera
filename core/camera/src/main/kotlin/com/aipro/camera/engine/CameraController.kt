@@ -683,7 +683,15 @@ class CameraController(context: Context) {
     private fun buildPreviewRequest(): CaptureRequest? {
         val device = device ?: return null
         val characteristics = characteristics ?: return null
-        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+        // TEMPLATE_RECORD is required for a stable Camera2 -> MediaRecorder pipeline.
+        // TEMPLATE_PREVIEW can leave the encoder surface without the correct recording
+        // intent/FPS behavior on some Samsung camera HAL versions.
+        val template = if (mode == CaptureMode.VIDEO) {
+            CameraDevice.TEMPLATE_RECORD
+        } else {
+            CameraDevice.TEMPLATE_PREVIEW
+        }
+        val builder = device.createCaptureRequest(template)
         previewSurface?.let { if (it in sessionSurfaces) builder.addTarget(it) }
         // The recorder surface must receive repeating frames; adding it to the session is not enough.
         recorder?.surface?.let { if (it in sessionSurfaces) builder.addTarget(it) }
@@ -1308,6 +1316,12 @@ class CameraController(context: Context) {
         // "setAudioEncoder called in an invalid state(2)" and no file is ever written.
         val prepared = runCatching {
             val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(appContext) else @Suppress("DEPRECATION") MediaRecorder()
+            mediaRecorder.setOnErrorListener { _, what, extra ->
+                AiproLog.e(TAG, "MediaRecorder runtime error what=$what extra=$extra")
+            }
+            mediaRecorder.setOnInfoListener { _, what, extra ->
+                AiproLog.i(TAG, "MediaRecorder info what=$what extra=$extra")
+            }
             if (withAudio) mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
             mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
             mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
